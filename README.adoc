@@ -1,0 +1,95 @@
+ell
+===
+:compact-option:
+
+'ell' is a modified subset of Scheme with added syntax sugar, incorporating
+ideas from Perl, Tcl and Bourne shell.  The goal was to conceive a programming
+language implementable with as little code as possible while still being
+reasonably comfortable to use.
+
+This package is an implementation of said language, meant to be self-contained,
+portable and reusable.  Performance is specifically not an intent.
+
+Syntax
+------
+Owing to its Scheme heritage, 'ell' is homoiconic, that is a program can be
+directly expressed using the language's data types.  There are only two of
+those: the list and the string.  Any numerical conversions are made on an
+as-needed basis.  Similarly, strings act like atoms/symbols when executed.
+
+The parser, however, does a bunch of transformations:
+
+ * `[a b c]` makes a call to `(list a b c)`;
+ * `@var` is a shorthand for `(set var)`;
+ * `{ code }` is the most complex one.  Each line within the curly braces is
+   wrapped in parentheses, and the resulting list is quoted, so that it doesn't
+   execute immediately.
+
+As an example, consider the following snippet:
+
+ print (if { = @var foo } {
+     quote 'Hello world\n'
+ } else {
+     quote 'Error\n'
+ })
+
+which gets expanded to the following:
+
+ ((print (if (quote ((= (set var) foo)))
+             (quote ((quote 'Hello world\n')))
+             else
+             (quote ((quote 'Error\n'))))))
+
+Observe that the whole program is enclosed in an implicit pair of `{}` and that
+`quote` is a very powerful special form which can replace many others if needed.
+
+Runtime
+-------
+All variables are put in a single global namespace with no further scoping.
+When calling a command (which is a list of lists), all arguments are
+automatically stored in variables named 1, 2, 3, ... n.  They are however
+effectively inaccessible and you must rename them first using the `arg` special
+form.
+
+When evaluating a command, the first argument is typically a string with its
+name and it is resolved as if `set` was called on it.
+
+The last expression in a block is the return value.
+
+Special forms
+-------------
+`quote <arg>`
+
+Returns the first argument.
+
+`arg <name>...`
+
+Reassigns arguments to the current call in order to given names.  This must be a
+special form because of the lack of variable scoping.  It needs to see arguments
+from the other scope.
+
+Standard library
+----------------
+`if <cond> <body> [elif <cond> <body>]... [else <body>]`
+
+Conditional evaluation, strings evaluate to themselves.
+
+`funargs`
+
+Returns arguments to the current evaluation context as a list.
+
+Contributing and Support
+------------------------
+Use this project's GitHub to report any bugs, request features, or submit pull
+requests.  If you want to discuss this project, or maybe just hang out with
+the developer, feel free to join me at irc://irc.janouch.name, channel #dev.
+
+License
+-------
+'ell' is written by Přemysl Janouch <p.janouch@gmail.com>.
+
+You may use the software under the terms of the ISC license, the text of which
+is included within the package, or, at your option, you may relicense the work
+under the MIT or the Modified BSD License, as listed at the following site:
+
+http://www.gnu.org/licenses/license-list.html
