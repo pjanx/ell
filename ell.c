@@ -252,11 +252,7 @@ token_name (enum token token) {
 struct lexer {
 	const char *p;                      ///< Current position in input
 	size_t len;                         ///< How many bytes of input are left
-
-	unsigned line;                      ///< Current line
-	unsigned column;                    ///< Current column
-
-	int64_t integer;                    ///< Parsed boolean or integer value
+	unsigned line, column;              ///< Current line and column
 	struct buffer string;               ///< Parsed string value
 };
 
@@ -273,7 +269,8 @@ lexer_free (struct lexer *self) {
 	free (self->string.s);
 }
 
-static bool lexer_is_word_char (int c) { return !strchr ("()[]{}\n@#'", c); }
+// FIXME: other isspace() stuff is missing
+static bool lexer_is_word_char (int c) { return !strchr ("()[]{}\n@#' ", c); }
 
 static int
 lexer_advance (struct lexer *self) {
@@ -301,6 +298,10 @@ lexer_error (struct lexer *self, char **e, const char *fmt, ...) {
 
 	*e = format ("near line %u, column %u: %s",
 		self->line + 1, self->column + 1, description);
+
+	// TODO: see above, we should be able to indicate error without allocation
+	if (!*e)
+		abort ();
 
 	free (description);
 }
@@ -426,9 +427,27 @@ lexer_next (struct lexer *self, char **e) {
 
 // --- Parsing -----------------------------------------------------------------
 
+// TODO: parse "s" into a tree, including all the syntax sugar
 static struct item *
 parse (const char *s, const char **error) {
-	// TODO
+	struct lexer lexer;
+	lexer_init (&lexer, s, strlen (s));
+
+	char *e = NULL;
+	enum token type;
+	while ((type = lexer_next (&lexer, &e)) != T_ABORT) {
+		printf ("%s", token_name (type));
+		if (type == T_STRING) {
+			buffer_append_c (&lexer.string, 0);
+			printf (" '%s'", lexer.string.s);
+		}
+		printf ("\n");
+	}
+	if (e) {
+		printf ("error: %s\n", e);
+		free (e);
+	}
+	lexer_free (&lexer);
 	return NULL;
 }
 
@@ -645,14 +664,19 @@ free_runtime_library (void) {
 
 // --- Main --------------------------------------------------------------------
 
-static void
-process_message (const char *msg) {
-	// Finally parse and execute the macro
+int
+main (int argc, char *argv[]) {
+	if (!init_runtime_library ())
+		printf ("%s\n", "runtime library initialization failed");
+
+	// TODO: load the entirety of stdin and execute it
+	const char *program = "print 'hello world\n'";
+
 	const char *error = NULL;
-	struct item *script = parse (msg, &error);
+	struct item *script = parse (program, &error);
 	if (error) {
 		printf ("%s: %s\r\n", "parse error", error);
-		return;
+		return 1;
 	}
 
 	struct context ctx;
@@ -669,15 +693,6 @@ process_message (const char *msg) {
 	if (failure)
 		printf ("%s: %s\r\n", "runtime error", failure);
 	context_free (&ctx);
-}
-
-int
-main (int argc, char *argv[]) {
-	if (!init_runtime_library ())
-		printf ("%s\n", "runtime library initialization failed");
-
-	// TODO: load the entirety of stdin and execute it
-	process_message ("print 'hello world\n'");
 
 	free_runtime_library ();
 	return 0;
