@@ -44,7 +44,7 @@
 static char *format (const char *format, ...) ATTRIBUTE_PRINTF (1, 2);
 
 static char *
-strdup_vprintf (const char *format, va_list ap) {
+vformat (const char *format, va_list ap) {
 	va_list aq;
 	va_copy (aq, ap);
 	int size = vsnprintf (NULL, 0, format, aq);
@@ -64,7 +64,7 @@ static char *
 format (const char *format, ...) {
 	va_list ap;
 	va_start (ap, format);
-	char *result = strdup_vprintf (format, ap);
+	char *result = vformat (format, ap);
 	va_end (ap);
 	return result;
 }
@@ -135,7 +135,7 @@ static struct item *new_clone_list (const struct item *);
 static void
 item_free (struct item *item) {
 	if (item->type == ITEM_LIST)
-		item_free_list (get_list (item));
+		item_free_list (item->head);
 	free (item);
 }
 
@@ -257,7 +257,7 @@ struct lexer {
 	unsigned column;                    ///< Current column
 
 	int64_t integer;                    ///< Parsed boolean or integer value
-	struct str string;                  ///< Parsed string value
+	struct buffer string;               ///< Parsed string value
 };
 
 /// Input has to be null-terminated anyway
@@ -266,12 +266,11 @@ lexer_init (struct lexer *self, const char *p, size_t len) {
 	memset (self, 0, sizeof *self);
 	self->p = p;
 	self->len = len;
-	str_init (&self->string);
 }
 
 static void
 lexer_free (struct lexer *self) {
-	str_free (&self->string);
+	free (self->string.s);
 }
 
 static bool lexer_is_word_char (int c) { return !strchr ("()[]{}\n@#'", c); }
@@ -289,33 +288,25 @@ lexer_advance (struct lexer *self) {
 	return c;
 }
 
-static void lexer_error (struct lexer *self,
-	struct error **e, const char *format, ...) ATTRIBUTE_PRINTF (3, 4);
+static void lexer_error (struct lexer *self, char **e, const char *fmt, ...)
+	ATTRIBUTE_PRINTF (3, 4);
 
+// TODO: see "script", we can just use error constants to avoid allocation
 static void
-lexer_error (struct lexer *self, struct error **e, const char *format, ...) {
-	struct str description;
-	str_init (&description);
-
+lexer_error (struct lexer *self, char **e, const char *fmt, ...) {
 	va_list ap;
-	va_start (ap, format);
-	str_append_vprintf (&description, format, ap);
+	va_start (ap, fmt);
+	char *description = vformat (fmt, ap);
 	va_end (ap);
 
-	if (self->report_line)
-		error_set (e, "near line %u, column %u: %s",
-			self->line + 1, self->column + 1, description.str);
-	else if (self->len)
-		error_set (e, "near character %u: %s",
-			self->column + 1, description.str);
-	else
-		error_set (e, "near end: %s", description.str);
+	*e = format ("near line %u, column %u: %s",
+		self->line + 1, self->column + 1, description);
 
-	str_free (&description);
+	free (description);
 }
 
 static bool
-lexer_hexa_escape (struct lexer *self, struct str *output) {
+lexer_hexa_escape (struct lexer *self, struct buffer *output) {
 	int i;
 	unsigned char code = 0;
 
@@ -334,20 +325,19 @@ lexer_hexa_escape (struct lexer *self, struct str *output) {
 	if (!i)
 		return false;
 
-	str_append_c (output, code);
+	buffer_append_c (output, code);
 	return true;
 }
 
 static bool
-lexer_escape_sequence
-	(struct lexer *self, struct str *output, struct error **e) {
+lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
 	if (!self->len) {
 		lexer_error (self, e, "premature end of escape sequence");
 		return false;
 	}
 
-	unsigned char c;
-	switch ((c = *self->p)) {
+	unsigned char c = *self->p;
+	switch (c) {
 	case '"':              break;
 	case '\\':             break;
 	case 'a':   c = '\a';  break;
@@ -372,19 +362,19 @@ lexer_escape_sequence
 		return false;
 	}
 
-	str_append_c (output, c);
+	buffer_append_c (output, c);
 	lexer_advance (self);
 	return true;
 }
 
 static bool
-lexer_string (struct lexer *self, struct str *output, struct error **e) {
+lexer_string (struct lexer *self, struct buffer *output, char **e) {
 	unsigned char c;
 	while (self->len) {
 		if ((c = lexer_advance (self)) == '\'')
 			return true;
 		if (c != '\\')
-			str_append_c (output, c);
+			buffer_append_c (output, c);
 		else if (!lexer_escape_sequence (self, output, e))
 			return false;
 	}
@@ -393,12 +383,15 @@ lexer_string (struct lexer *self, struct str *output, struct error **e) {
 }
 
 static enum token
-lexer_next (struct lexer *self, struct error **e) {
+lexer_next (struct lexer *self, char **e) {
 	// Skip over any whitespace between tokens
-	while (self->len && isspace_ascii (*self->p) && *self->p != '\n')
+	while (self->len && isspace (*self->p) && *self->p != '\n')
 		lexer_advance (self);
 	if (!self->len)
 		return T_ABORT;
+
+	free (self->string.s);
+	self->string = (struct buffer) BUFFER_INITIALIZER;
 
 	switch (*self->p) {
 	case '(':   lexer_advance (self);  return T_LPAREN;
@@ -419,232 +412,24 @@ lexer_next (struct lexer *self, struct error **e) {
 
 	case '\'':
 		lexer_advance (self);
-		str_reset (&self->string);
 		if (!lexer_string (self, &self->string, e))
 			return T_ABORT;
 		return T_STRING;
 	}
 
 	assert (lexer_is_word_char (*self->p));
-	str_reset (&self->string);
 	do
-		str_append_c (&self->string, lexer_advance (self));
+		buffer_append_c (&self->string, lexer_advance (self));
 	while (lexer_is_word_char (*self->p));
 	return T_STRING;
 }
 
 // --- Parsing -----------------------------------------------------------------
 
-#define PARSE_ERROR_TABLE(XX)                                                  \
-	XX( OK,                  NULL                                  )           \
-	XX( EOF,                 "unexpected end of input"             )           \
-	XX( INVALID_HEXA_ESCAPE, "invalid hexadecimal escape sequence" )           \
-	XX( INVALID_ESCAPE,      "unrecognized escape sequence"        )           \
-	XX( MEMORY,              "memory allocation failure"           )           \
-	XX( FLOAT_RANGE,         "floating point value out of range"   )           \
-	XX( INTEGER_RANGE,       "integer out of range"                )           \
-	XX( INVALID_INPUT,       "invalid input"                       )           \
-	XX( UNEXPECTED_INPUT,    "unexpected input"                    )
-
-enum tokenizer_error {
-#define XX(x, y) PARSE_ERROR_ ## x,
-	PARSE_ERROR_TABLE (XX)
-#undef XX
-	PARSE_ERROR_COUNT
-};
-
-struct tokenizer {
-	const char *cursor;
-	enum tokenizer_error error;
-};
-
-static bool
-decode_hexa_escape (struct tokenizer *self, struct buffer *buf) {
-	int i;
-	char c, code = 0;
-
-	for (i = 0; i < 2; i++) {
-		c = tolower (*self->cursor);
-		if (c >= '0' && c <= '9')
-			code = (code << 4) | (c - '0');
-		else if (c >= 'a' && c <= 'f')
-			code = (code << 4) | (c - 'a' + 10);
-		else
-			break;
-
-		self->cursor++;
-	}
-
-	if (!i)
-		return false;
-
-	buffer_append_c (buf, code);
-	return true;
-}
-
-static bool
-decode_escape_sequence (struct tokenizer *self, struct buffer *buf) {
-	// Support some basic escape sequences from the C language
-	char c;
-	switch ((c = *self->cursor)) {
-	case '\0':
-		self->error = PARSE_ERROR_EOF;
-		return false;
-	case 'x':
-	case 'X':
-		self->cursor++;
-		if (decode_hexa_escape (self, buf))
-			return true;
-
-		self->error = PARSE_ERROR_INVALID_HEXA_ESCAPE;
-		return false;
-	default:
-		self->cursor++;
-		const char *from = "abfnrtv\"\\", *to = "\a\b\f\n\r\t\v\"\\", *x;
-		if ((x = strchr (from, c))) {
-			buffer_append_c (buf, to[x - from]);
-			return true;
-		}
-		self->error = PARSE_ERROR_INVALID_ESCAPE;
-		return false;
-	}
-}
-
-static struct item *
-parse_string (struct tokenizer *self) {
-	struct buffer buf = BUFFER_INITIALIZER;
-	struct item *item = NULL;
-	char c;
-
-	while (true)
-	switch ((c = *self->cursor++)) {
-	case '\0':
-		self->cursor--;
-		self->error = PARSE_ERROR_EOF;
-		goto end;
-	case '"':
-		if (buf.memory_failure
-		 || !(item = new_string (buf.s, buf.len)))
-			self->error = PARSE_ERROR_MEMORY;
-		goto end;
-	case '\\':
-		if (decode_escape_sequence (self, &buf))
-			break;
-		goto end;
-	default:
-		buffer_append_c (&buf, c);
-	}
-
-end:
-	free (buf.s);
-	return item;
-}
-
-static struct item *
-parse_word (struct tokenizer *self) {
-	struct buffer buf = BUFFER_INITIALIZER;
-	struct item *item = NULL;
-	char c;
-
-	// Here we accept almost anything that doesn't break the grammar
-	while (!strchr (" []\"", (c = *self->cursor++)) && (unsigned char) c > ' ')
-		buffer_append_c (&buf, c);
-	self->cursor--;
-
-	if (buf.memory_failure)
-		self->error = PARSE_ERROR_MEMORY;
-	else if (!buf.len)
-		self->error = PARSE_ERROR_INVALID_INPUT;
-	else if (!(item = new_word (buf.s, buf.len)))
-		self->error = PARSE_ERROR_MEMORY;
-
-	free (buf.s);
-	return item;
-}
-
-static struct item *parse_item_list (struct tokenizer *);
-
-static struct item *
-parse_list (struct tokenizer *self) {
-	struct item *list = parse_item_list (self);
-	if (self->error) {
-		assert (list == NULL);
-		return NULL;
-	}
-	if (!*self->cursor) {
-		self->error = PARSE_ERROR_EOF;
-		item_free_list (list);
-		return NULL;
-	}
-	assert (*self->cursor == ']');
-	self->cursor++;
-	return new_list (list);
-}
-
-static struct item *
-parse_item (struct tokenizer *self) {
-	char c;
-	switch ((c = *self->cursor++)) {
-	case '[':  return parse_list (self);
-	case '"':  return parse_string (self);
-	default:;
-	}
-
-	self->cursor--;
-	return parse_word (self);
-}
-
-static struct item *
-parse_item_list (struct tokenizer *self) {
-	struct item *head = NULL;
-	struct item **tail = &head;
-
-	char c;
-	bool expected = true;
-	while ((c = *self->cursor) && c != ']') {
-		if (isspace (c)) {
-			self->cursor++;
-			expected = true;
-			continue;
-		} else if (!expected) {
-			self->error = PARSE_ERROR_UNEXPECTED_INPUT;
-			goto fail;
-		}
-
-		if (!(*tail = parse_item (self)))
-			goto fail;
-		tail = &(*tail)->next;
-		expected = false;
-	}
-	return head;
-
-fail:
-	item_free_list (head);
-	return NULL;
-}
-
 static struct item *
 parse (const char *s, const char **error) {
-	struct tokenizer self = { .cursor = s, .error = PARSE_ERROR_OK };
-	struct item *list = parse_item_list (&self);
-	if (!self.error && *self.cursor != '\0') {
-		self.error = PARSE_ERROR_UNEXPECTED_INPUT;
-		item_free_list (list);
-		list = NULL;
-	}
-
-#define XX(x, y) y,
-	static const char *strings[PARSE_ERROR_COUNT] =
-		{ PARSE_ERROR_TABLE (XX) };
-#undef XX
-
-	static char error_buf[128];
-	if (self.error && error) {
-		snprintf (error_buf, sizeof error_buf, "at character %d: %s",
-			(int) (self.cursor - s) + 1, strings[self.error]);
-		*error = error_buf;
-	}
-	return list;
+	// TODO
+	return NULL;
 }
 
 // --- Runtime -----------------------------------------------------------------
@@ -700,7 +485,7 @@ set_error (struct context *ctx, const char *format, ...) {
 
 	va_list ap;
 	va_start (ap, format);
-	ctx->error = strdup_vprintf (format, ap);
+	ctx->error = vformat (format, ap);
 	va_end (ap);
 
 	if (!ctx->error)
@@ -807,7 +592,7 @@ execute (struct context *ctx, struct item *script) {
 			if (!push (ctx, new_clone (script)))
 				return false;
 		}
-		else if (!call_function (ctx, get_word (script)))
+		else if (!call_function (ctx, script->value))
 			return false;
 	}
 	return true;
@@ -827,7 +612,7 @@ init_runtime_library_scripts (void) {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} scripts[] = {
-		{ "greet", "print (.. 'hello ' (.. @1))" },
+		{ "greet", "arg _name \n print (.. 'hello ' (.. @_name))" },
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (scripts); i++) {
@@ -870,8 +655,8 @@ defn (fn_concatenate) {
 static bool
 init_runtime_library (void)
 {
-	return register_handler ("..",     fn_concatenate);
-		&& register_handler ("print",  fn_print);
+	return register_handler ("..",     fn_concatenate)
+		&& register_handler ("print",  fn_print)
 		&& init_runtime_library_scripts ();
 }
 
@@ -893,12 +678,12 @@ process_message (const char *msg) {
 	struct item *script = parse (msg, &error);
 	if (error) {
 		printf ("%s: %s\r\n", "parse error", error);
-		goto end;
+		return;
 	}
 
 	struct context ctx;
 	context_init (&ctx);
-	ctx.user_data = &info;
+	ctx.user_data = NULL;
 	execute (&ctx, script);
 	item_free_list (script);
 
@@ -910,17 +695,11 @@ process_message (const char *msg) {
 	if (failure)
 		printf ("%s: %s\r\n", "runtime error", failure);
 	context_free (&ctx);
-end:
-	free (msg_ctx_quote);
 }
 
 int
 main (int argc, char *argv[]) {
-	freopen (NULL, "rb", stdin);   setvbuf (stdin,  NULL, _IOLBF, BUFSIZ);
-	freopen (NULL, "wb", stdout);  setvbuf (stdout, NULL, _IOLBF, BUFSIZ);
-
-	if (!init_runtime_library ()
-	 || !register_handler (".", fn_dot))
+	if (!init_runtime_library ())
 		printf ("%s\n", "runtime library initialization failed");
 
 	// TODO: load the entirety of stdin and execute it
