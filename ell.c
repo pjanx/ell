@@ -435,8 +435,7 @@ parse (const char *s, const char **error) {
 // --- Runtime -----------------------------------------------------------------
 
 struct context {
-	struct item *stack;                 ///< The current top of the stack
-	size_t stack_size;                  ///< Number of items on the stack
+	struct item variables;              ///< List of variables
 
 	char *error;                        ///< Error information
 	bool error_is_fatal;                ///< Whether the error can be catched
@@ -460,23 +459,13 @@ struct fn *g_functions;                 ///< Maps words to functions
 
 static void
 context_init (struct context *ctx) {
-	ctx->stack = NULL;
-	ctx->stack_size = 0;
-
-	ctx->error = NULL;
-	ctx->error_is_fatal = false;
-	ctx->memory_failure = false;
-
-	ctx->user_data = NULL;
+	memset (ctx, 0, sizeof *ctx);
 }
 
 static void
 context_free (struct context *ctx) {
-	item_free_list (ctx->stack);
-	ctx->stack = NULL;
-
+	item_free_list (ctx->variables.head);
 	free (ctx->error);
-	ctx->error = NULL;
 }
 
 static bool
@@ -491,22 +480,6 @@ set_error (struct context *ctx, const char *format, ...) {
 	if (!ctx->error)
 		ctx->memory_failure = true;
 	return false;
-}
-
-static bool
-push (struct context *ctx, struct item *item) {
-	// The `item' is typically a result from new_<type>(), thus when it is null,
-	// that function must have failed.  This is a shortcut for convenience.
-	if (!item) {
-		ctx->memory_failure = true;
-		return false;
-	}
-
-	assert (item->next == NULL);
-	item->next = ctx->stack;
-	ctx->stack = item;
-	ctx->stack_size++;
-	return true;
 }
 
 static bool execute (struct context *, struct item *);
@@ -588,12 +561,11 @@ register_script (const char *name, struct item *script) {
 static bool
 execute (struct context *ctx, struct item *script) {
 	for (; script; script = script->next) {
-		if (script->type != ITEM_STRING) {
-			if (!push (ctx, new_clone (script)))
-				return false;
-		}
-		else if (!call_function (ctx, script->value))
-			return false;
+		// TODO: this should be a list
+		//   -> if the first item is a STRING, resolve it
+		//   -> but handle special forms
+		//   -> assign the rest of the items to variables
+		//   -> recurse
 	}
 	return true;
 }
@@ -628,14 +600,16 @@ init_runtime_library_scripts (void) {
 	return ok;
 }
 
-defn (fn_print) {
-	check_stack (1);
-	struct item *item = pop (ctx);
-	struct user_info *info = ctx->user_data;
+static struct item *
+var (struct context *ctx, const char *name) {
+	// TODO: go through the "ctx->variables" list of lists and look for "name"
+	return NULL;
+}
 
+defn (fn_print) {
 	struct buffer buf = BUFFER_INITIALIZER;
-	item_to_str (item, &buf);
-	item_free (item);
+	struct item *item = var (ctx, "1");
+	buffer_append (&buf, item->value, item->len);
 	buffer_append_c (&buf, '\0');
 	if (buf.memory_failure) {
 		ctx->memory_failure = true;
