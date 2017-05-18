@@ -30,6 +30,7 @@
 #include <stdbool.h>
 #include <strings.h>
 #include <math.h>
+#include <setjmp.h>
 
 #if defined __GNUC__
 #define ATTRIBUTE_PRINTF(x, y) __attribute__ ((format (printf, x, y)))
@@ -427,34 +428,192 @@ lexer_next (struct lexer *self, char **e) {
 
 // --- Parsing -----------------------------------------------------------------
 
-// TODO: parse "s" into a tree, including all the syntax sugar
-static struct item *
-parse (const char *s, const char **error) {
-	struct lexer lexer;
-	lexer_init (&lexer, s, strlen (s));
+struct parser
+{
+	struct lexer lexer;                 ///< Tokenizer
+	char *error;                        ///< Tokenizer error
+	enum token token;                   ///< Current token in the lexer
+	bool replace_token;                 ///< Replace the token
+};
 
-	char *e = NULL;
-	enum token type;
-	while ((type = lexer_next (&lexer, &e)) != T_ABORT) {
-		printf ("%s", token_name (type));
-		if (type == T_STRING) {
-			buffer_append_c (&lexer.string, 0);
-			printf (" '%s'", lexer.string.s);
+static void
+parser_init (struct parser *self, const char *script, size_t len) {
+	memset (self, 0, sizeof *self);
+	lexer_init (&self->lexer, script, len);
+
+	// As reading in tokens may cause exceptions, we wait for the first peek()
+	// to replace the initial T_ABORT.
+	self->replace_token = true;
+}
+
+static void
+parser_free (struct parser *self) {
+	lexer_free (&self->lexer);
+	if (self->error)
+		free (self->error);
+}
+
+static enum token
+parser_peek (struct parser *self, jmp_buf out) {
+	if (self->replace_token)
+	{
+		self->token = lexer_next (&self->lexer, &self->error);
+		if (self->error)
+			longjmp (out, 1);
+		self->replace_token = false;
+
+#ifndef NDEBUG
+		if (self->token == T_STRING) {
+			buffer_append_c (&self->lexer.string, 0);
+			printf ("'%s'\n", self->lexer.string.s);
+		} else {
+			printf ("%s\n", token_name (self->token));
 		}
-		printf ("\n");
+#endif
 	}
-	if (e) {
-		printf ("error: %s\n", e);
-		free (e);
+	return self->token;
+}
+
+static bool
+parser_accept (struct parser *self, enum token token, jmp_buf out) {
+	return self->replace_token = (parser_peek (self, out) == token);
+}
+
+static void
+parser_expect (struct parser *self, enum token token, jmp_buf out) {
+	if (parser_accept (self, token, out))
+		return;
+
+	lexer_error (&self->lexer, &self->error, "unexpected `%s', expected `%s'",
+		token_name (self->token),
+		token_name (token));
+	longjmp (out, 1);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// We don't need no generator, but a few macros will come in handy.
+// From time to time C just doesn't have the right features.
+
+#define PEEK()         parser_peek   (self, err)
+#define ACCEPT(token)  parser_accept (self, token, err)
+#define EXPECT(token)  parser_expect (self, token, err)
+#define SKIP_NL()      do {} while (ACCEPT (T_NEWLINE))
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static struct item * parse_line (struct parser *self, jmp_buf out);
+
+static struct item *
+parse_prefix_list (struct item *list, const char *name) {
+	struct item *prefix = new_string (name, strlen (name));
+	prefix->next = list;
+	return new_list (prefix);
+}
+
+static struct item *
+parse_item (struct parser *self, jmp_buf out) {
+	struct item *volatile result = NULL, *volatile *tail = &result;
+	jmp_buf err;
+
+	if (setjmp (err)) {
+		item_free_list (result);
+		longjmp (out, 1);
 	}
-	lexer_free (&lexer);
+
+	SKIP_NL ();
+	if (ACCEPT (T_STRING))
+		return new_string (self->lexer.string.s, self->lexer.string.len);
+	if (ACCEPT (T_AT)) {
+		result = parse_item (self, out);
+		return parse_prefix_list (result, "set");
+	}
+	if (ACCEPT (T_LPAREN)) {
+		while (!ACCEPT (T_RPAREN)) {
+			*tail = parse_item (self, err);
+			tail = &(*tail)->next;
+			SKIP_NL ();
+		}
+		return new_list (result);
+	}
+	if (ACCEPT (T_LBRACKET)) {
+		while (!ACCEPT (T_RBRACKET)) {
+			*tail = parse_item (self, err);
+			tail = &(*tail)->next;
+			SKIP_NL ();
+		}
+		return parse_prefix_list (result, "list");
+	}
+	if (ACCEPT (T_LBRACE)) {
+		while ((*tail = parse_line (self, err)))
+			tail = &(*tail)->next;
+		EXPECT (T_RBRACE);
+		return parse_prefix_list (result, "quote");
+	}
+
+	lexer_error (&self->lexer, &self->error,
+		"unexpected `%s', expected a value", token_name (self->token));
+	longjmp (out, 1);
+}
+
+static struct item *
+parse_line (struct parser *self, jmp_buf out) {
+	struct item *volatile result = NULL, *volatile *tail = &result;
+	jmp_buf err;
+
+	if (setjmp (err)) {
+		item_free_list (result);
+		longjmp (out, 1);
+	}
+
+	while (PEEK () != T_RBRACE && PEEK () != T_ABORT) {
+		if (ACCEPT (T_NEWLINE)) {
+			if (result)
+				return new_list (result);
+		} else {
+			*tail = parse_item (self, err);
+			tail = &(*tail)->next;
+		}
+	}
+	if (result)
+		return new_list (result);
 	return NULL;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+#undef PEEK
+#undef ACCEPT
+#undef EXPECT
+#undef SKIP_NL
+
+static struct item *
+parse (const char *s, size_t len, char **e) {
+	struct parser parser;
+	parser_init (&parser, s, len);
+
+	struct item *volatile result = NULL, *volatile *tail = &result;
+	jmp_buf err;
+
+	if (setjmp (err)) {
+		item_free_list (result);
+		*e = parser.error;
+		lexer_free (&parser.lexer);
+		return NULL;
+	}
+
+	while ((*tail = parse_line (&parser, err)))
+		tail = &(*tail)->next;
+	parser_expect (&parser, T_ABORT, err);
+
+	parser_free (&parser);
+	return new_list (result);
 }
 
 // --- Runtime -----------------------------------------------------------------
 
 struct context {
-	struct item variables;              ///< List of variables
+	struct item *variables;             ///< List of variables
 
 	char *error;                        ///< Error information
 	bool error_is_fatal;                ///< Whether the error can be catched
@@ -483,7 +642,7 @@ context_init (struct context *ctx) {
 
 static void
 context_free (struct context *ctx) {
-	item_free_list (ctx->variables.head);
+	item_free_list (ctx->variables);
 	free (ctx->error);
 }
 
@@ -607,11 +766,13 @@ init_runtime_library_scripts (void) {
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (scripts); i++) {
-		const char *error = NULL;
-		struct item *script = parse (scripts[i].definition, &error);
-		if (error) {
+		char *e = NULL;
+		struct item *script = parse (scripts[i].definition,
+			strlen (scripts[i].definition), &e);
+		if (e) {
 			printf ("error parsing internal script `%s': %s\n",
-				scripts[i].definition, error);
+				scripts[i].definition, e);
+			free (e);
 			ok = false;
 		} else
 			ok &= register_script (scripts[i].name, script);
@@ -664,6 +825,16 @@ free_runtime_library (void) {
 
 // --- Main --------------------------------------------------------------------
 
+static void
+print_tree (struct item *tree) {
+	// TODO: first figure out how to just print the tree
+	// TODO: also re-add syntax sugar
+	for (; tree; tree = tree->next) {
+	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 int
 main (int argc, char *argv[]) {
 	if (!init_runtime_library ())
@@ -672,10 +843,11 @@ main (int argc, char *argv[]) {
 	// TODO: load the entirety of stdin and execute it
 	const char *program = "print 'hello world\n'";
 
-	const char *error = NULL;
-	struct item *script = parse (program, &error);
-	if (error) {
-		printf ("%s: %s\r\n", "parse error", error);
+	char *e = NULL;
+	struct item *script = parse (program, strlen (program), &e);
+	if (e) {
+		printf ("%s: %s\n", "parse error", e);
+		free (e);
 		return 1;
 	}
 
@@ -691,7 +863,7 @@ main (int argc, char *argv[]) {
 	else if (ctx.error)
 		failure = ctx.error;
 	if (failure)
-		printf ("%s: %s\r\n", "runtime error", failure);
+		printf ("%s: %s\n", "runtime error", failure);
 	context_free (&ctx);
 
 	free_runtime_library ();
