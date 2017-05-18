@@ -66,7 +66,7 @@ Returns the first argument.
 
 Reassigns arguments to the current call in order to given names.  This must be a
 special form because of the lack of variable scoping.  It needs to see arguments
-from the other scope.
+from the outer scope.
 
 Standard library
 ----------------
@@ -78,11 +78,17 @@ Conditional evaluation, strings evaluate to themselves.
 
 Returns arguments to the current evaluation context as a list.
 
+`list`
+
+Returns a list of parameters.  The syntax sugar for lists is `[]`.
+
 Contributing and Support
 ------------------------
 Use this project's GitHub to report any bugs, request features, or submit pull
 requests.  If you want to discuss this project, or maybe just hang out with
 the developer, feel free to join me at irc://irc.janouch.name, channel #dev.
+
+Bitcoin donations: 12r5uEWEgcHC46xd64tt3hHt9EUvYYDHe9
 
 License
 -------
