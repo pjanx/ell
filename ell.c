@@ -774,7 +774,52 @@ rename_arguments (struct context *ctx, struct item *names) {
 	return true;
 }
 
+static bool execute_statement (struct context *, struct item *, struct item **);
 static bool execute (struct context *ctx, struct item *body, struct item **);
+
+static bool
+execute_args_list (struct context *ctx, struct item *args, struct item **res) {
+	for (struct item *arg = args; arg; arg = arg->next) {
+		struct item *evaluated = NULL;
+		if (!execute_statement (ctx, arg, &evaluated))
+			return false;
+		if (evaluated) {
+			item_free_list (evaluated->next);
+			evaluated->next = NULL;
+			*res = evaluated;
+			res = &evaluated->next;
+		}
+	}
+	return true;
+}
+
+static bool
+execute_native (struct context *ctx,
+	struct native_fn *fn, struct item *next, struct item **res) {
+	struct item *args = NULL;
+	bool ok = execute_args_list (ctx, next, &args)
+		&& fn->handler (ctx, args, res);
+	item_free_list (args);
+	return ok;
+}
+
+static bool
+execute_args (struct context *ctx, struct item *next) {
+	struct item *args = NULL;
+	if (!execute_args_list (ctx, next, &args)) {
+		item_free_list (args);
+		return false;
+	}
+
+	char buf[64];
+	size_t i = 0;
+	for (struct item *arg = args; arg; arg = arg->next) {
+		(void) snprintf (buf, sizeof buf, "%zu", i++);
+		set (ctx, buf, arg);
+	}
+	item_free_list (args);
+	return true;
+}
 
 // TODO: we should probably maintain arguments in a separate list,
 //   either that or at least remember the count so that we can reset them
@@ -794,68 +839,43 @@ execute_statement
 	if (!(body = statement->head))
 		return true;
 
+	struct item *following = body->next;
 	const char *name = "(anonymous)";
 	if (body->type == ITEM_STRING) {
 		name = body->value;
+		// TODO: these could be just regular handlers, only top priority
 		if (!strcmp (name, "quote")) {
-			if ((*result = new_clone_list (body->next)))
+			if ((*result = new_clone_list (following)))
 				return true;
 			ctx->memory_failure = true;
 			return false;
 		}
 		if (!strcmp (name, "arg"))
-			return rename_arguments (ctx, body->next);
-
-		if (!(body = get (ctx, body->value))) {
-			struct native_fn *fn;
-			for (fn = g_native; fn; fn = fn->next)
-				if (!strcmp (name, fn->name))
-					break;
-			if (!fn)
-				return set_error (ctx, "unknown function: %s", name);
-
-			struct item *args = NULL, **tail = &args;
-			for (struct item *arg = statement->head->next;
-				arg; arg = arg->next) {
-				struct item *evaluated = NULL;
-				if (!execute_statement (ctx, arg, &evaluated))
-					return false;
-
-				if (evaluated) {
-					item_free_list (evaluated->next);
-					evaluated->next = NULL;
-					*tail = evaluated;
-					tail = &evaluated->next;
-				}
-			}
-			bool ok = fn->handler (ctx, args, result);
-			item_free_list (args);
-			if (ok)
-				return true;
-			goto error;
-		}
+			return rename_arguments (ctx, following);
+		body = get (ctx, name);
 	}
-	// Recursion could be pretty fatal, let's not do that
-	if (body->type == ITEM_STRING)
-		return new_clone (body);
 
-	size_t i = 0;
-	for (struct item *arg = statement->head->next; arg; arg = arg->next) {
-		struct item *evaluated = NULL;
-		if (!execute_statement (ctx, arg, &evaluated))
-			return false;
-
-		item_free_list (evaluated->next);
-		evaluated->next = NULL;
-
-		char buf[64];
-		(void) snprintf (buf, sizeof buf, "%zu", i++);
-		set (ctx, buf, evaluated);
+	if (!body) {
+		// TODO: this could be a function
+		struct native_fn *fn;
+		for (fn = g_native; fn; fn = fn->next)
+			if (!strcmp (name, fn->name))
+				break;
+		if (!fn)
+			return set_error (ctx, "unknown function: %s", name);
+		if (execute_native (ctx, fn, following, result))
+			return true;
+	} else if (body->type == ITEM_STRING) {
+		// Recursion could be pretty fatal, let's not do that
+		if ((*result = new_clone (body)))
+			return true;
+		ctx->memory_failure = true;
+	} else {
+		if (execute_args (ctx, following)
+		 && execute (ctx, body->head, result))
+			return true;
 	}
-	if (execute (ctx, body->head, result))
-		return true;
 
-error:
 	// In this case, `error' is NULL
 	if (ctx->memory_failure)
 		return false;
@@ -906,7 +926,7 @@ init_runtime_library_scripts (struct context *ctx) {
 			free (e);
 			ok = false;
 		} else
-			set (ctx, functions[i].name, body);
+			ok &= set (ctx, functions[i].name, body);
 	}
 	return ok;
 }
@@ -928,9 +948,10 @@ defn (fn_set) {
 defn (fn_print) {
 	(void) result;
 
+	// TODO: error on list
 	struct buffer buf = BUFFER_INITIALIZER;
-	struct item *item = args;
-	buffer_append (&buf, item->value, item->len);
+	for (; args; args = args->next)
+		buffer_append (&buf, args->value, args->len);
 	buffer_append_c (&buf, '\0');
 	if (buf.memory_failure) {
 		ctx->memory_failure = true;
