@@ -1,0 +1,6 @@
+set greet {
+	arg _name
+	print 'hello ' @_name '\n'
+}
+greet world
+greet creator

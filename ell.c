@@ -270,9 +270,9 @@ lexer_free (struct lexer *self) {
 	free (self->string.s);
 }
 
-static bool lexer_is_ignored (int c) { return c == ' ' || c == '\t'; }
+static bool lexer_is_ignored (int c) { return strchr (" \t", c); }
 static bool lexer_is_word_char (int c) {
-	return !lexer_is_ignored (c) && !strchr ("()[]{}\n@#' ", c);
+	return !lexer_is_ignored (c) && !strchr ("()[]{}\n@#'", c);
 }
 
 static int
@@ -573,7 +573,7 @@ parse_item (struct parser *self, jmp_buf out) {
 		while ((*tail = parse_line (self, err)))
 			tail = &(*tail)->next;
 		EXPECT (T_RBRACE);
-		return parse_prefix_list (result, "quote");
+		return parse_prefix_list (new_list (result), "quote");
 	}
 
 	lexer_error (&self->lexer, &self->error,
@@ -653,13 +653,17 @@ struct native_fn {
 
 struct native_fn *g_native;             ///< Maps words to functions
 
-static bool
-register_native (const char *name, handler_fn handler) {
-	struct native_fn *fn = NULL;
-	for (fn = g_native; fn; fn = fn->next)
+static struct native_fn *
+native_find (const char *name) {
+	for (struct native_fn *fn = g_native; fn; fn = fn->next)
 		if (!strcmp (fn->name, name))
-			break;
+			return fn;
+	return NULL;
+}
 
+static bool
+native_register (const char *name, handler_fn handler) {
+	struct native_fn *fn = native_find (name);
 	if (!fn) {
 		if (!(fn = calloc (1, sizeof *fn + strlen (name) + 1)))
 			return false;
@@ -762,12 +766,12 @@ rename_arguments (struct context *ctx, struct item *names) {
 		(void) snprintf (buf, sizeof buf, "%zu", i++);
 		struct item *value = get (ctx, buf);
 
+		// TODO: set to some sort of nil value?
+		if (!value)
+			return true;
+
 		if (names->type != ITEM_STRING)
 			continue;
-		if (value && !(value = new_clone (value))) {
-			ctx->memory_failure = true;
-			return false;
-		}
 		if (!set (ctx, names->value, value))
 			return false;
 	}
@@ -803,6 +807,8 @@ execute_native (struct context *ctx,
 	return ok;
 }
 
+// TODO: we should probably maintain arguments in a separate list,
+//   either that or at least remember the count so that we can reset them
 static bool
 execute_args (struct context *ctx, struct item *next) {
 	struct item *args = NULL;
@@ -821,8 +827,6 @@ execute_args (struct context *ctx, struct item *next) {
 	return true;
 }
 
-// TODO: we should probably maintain arguments in a separate list,
-//   either that or at least remember the count so that we can reset them
 static bool
 execute_statement
 	(struct context *ctx, struct item *statement, struct item **result) {
@@ -856,11 +860,7 @@ execute_statement
 	}
 
 	if (!body) {
-		// TODO: this could be a function
-		struct native_fn *fn;
-		for (fn = g_native; fn; fn = fn->next)
-			if (!strcmp (name, fn->name))
-				break;
+		struct native_fn *fn = native_find (name);
 		if (!fn)
 			return set_error (ctx, "unknown function: %s", name);
 		if (execute_native (ctx, fn, following, result))
@@ -913,7 +913,7 @@ init_runtime_library_scripts (struct context *ctx) {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} functions[] = {
-		{ "greet", "arg _name\n" "print (.. 'hello ' @_name '\\n')" },
+		// TODO: try to think of something useful
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
@@ -941,7 +941,7 @@ defn (fn_set) {
 		return set (ctx, name->value, value);
 
 	// FIXME: how do we represent a nil value here?
-	*result = get (ctx, name->value);
+	*result = new_clone (get (ctx, name->value));
 	return true;
 }
 
@@ -958,7 +958,7 @@ defn (fn_print) {
 		return false;
 	}
 
-	printf ("%s\n", buf.s);
+	printf ("%s", buf.s);
 	free (buf.s);
 	return true;
 }
@@ -981,9 +981,9 @@ defn (fn_concatenate) {
 static bool
 init_runtime_library (void)
 {
-	return register_native ("..",     fn_concatenate)
-		&& register_native ("set",    fn_set)
-		&& register_native ("print",  fn_print);
+	return native_register ("..",     fn_concatenate)
+		&& native_register ("set",    fn_set)
+		&& native_register ("print",  fn_print);
 }
 
 static void
@@ -999,11 +999,22 @@ free_runtime_library (void) {
 
 int
 main (int argc, char *argv[]) {
-	// TODO: load the entirety of stdin
-	const char *program = "greet 'world'";
+	FILE *fp = stdin;
+	if (argc > 1 && !(fp = fopen (argv[1], "rb"))) {
+		fprintf (stderr, "%s: %s\n", argv[1], strerror (errno));
+		return 1;
+	}
+
+	int c;
+	struct buffer buf = BUFFER_INITIALIZER;
+	while ((c = fgetc (fp)) != EOF)
+		buffer_append_c (&buf, c);
+	buffer_append_c (&buf, 0);
+	fclose (fp);
 
 	char *e = NULL;
-	struct item *tree = parse (program, strlen (program), &e);
+	struct item *tree = parse (buf.s, buf.len, &e);
+	free (buf.s);
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
 		free (e);
@@ -1015,7 +1026,7 @@ main (int argc, char *argv[]) {
 	if (!init_runtime_library ()
 	 || !init_runtime_library_scripts (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
-	ctx.user_data = NULL;
+
 	struct item *result = NULL;
 	(void) execute (&ctx, tree->head, &result);
 	item_free_list (result);
