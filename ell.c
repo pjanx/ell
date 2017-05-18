@@ -643,6 +643,38 @@ parse (const char *s, size_t len, char **e) {
 
 // --- Runtime -----------------------------------------------------------------
 
+struct context;
+typedef bool (*handler_fn) (struct context *);
+
+struct native_fn {
+	struct native_fn *next;             ///< The next link in the chain
+	handler_fn handler;                 ///< Internal C handler, or NULL
+	char name[];                        ///< The name of the function
+};
+
+struct native_fn *g_native;             ///< Maps words to functions
+
+static bool
+register_native (const char *name, handler_fn handler) {
+	struct native_fn *fn = NULL;
+	for (fn = g_native; fn; fn = fn->next)
+		if (!strcmp (fn->name, name))
+			break;
+
+	if (!fn) {
+		if (!(fn = calloc (1, sizeof *fn + strlen (name) + 1)))
+			return false;
+		strcpy (fn->name, name);
+		fn->next = g_native;
+		g_native = fn;
+	}
+
+	fn->handler = handler;
+	return true;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 struct context {
 	struct item *variables;             ///< List of variables
 
@@ -652,19 +684,6 @@ struct context {
 
 	void *user_data;                    ///< User data
 };
-
-/// Internal handler for a function
-typedef bool (*handler_fn) (struct context *);
-
-struct fn {
-	struct fn *next;                    ///< The next link in the chain
-
-	handler_fn handler;                 ///< Internal C handler, or NULL
-	struct item *script;                ///< Alternatively runtime code
-	char name[];                        ///< The name of the function
-};
-
-struct fn *g_functions;                 ///< Maps words to functions
 
 static void
 context_init (struct context *ctx) {
@@ -691,20 +710,46 @@ set_error (struct context *ctx, const char *format, ...) {
 	return false;
 }
 
-static bool execute (struct context *, struct item *);
+static struct item *
+var (struct context *ctx, const char *name) {
+	for (struct item *iter = ctx->variables; iter; iter = iter->next)
+		if (!strcmp (iter->head->value, name))
+			return iter->head->next;
+	return NULL;
+}
+
+static void
+set (struct context *ctx, const char *name, struct item *value) {
+	for (struct item *iter = ctx->variables; iter; iter = iter->next)
+		if (!strcmp (iter->head->value, name)) {
+			item_free (iter->head->next);
+			iter->head->next = value;
+			return;
+		}
+	struct item *key = new_string (name, strlen (name));
+	key->next = value;
+	struct item *pair = new_list (key);
+	pair->next = ctx->variables;
+	ctx->variables = pair;
+}
+
+static struct item *execute (struct context *, struct item *);
 
 static bool
 call_function (struct context *ctx, const char *name) {
-	struct fn *iter;
-	for (iter = g_functions; iter; iter = iter->next)
-		if (!strcmp (name, iter->name))
-			goto found;
-	return set_error (ctx, "unknown function: %s", name);
-
-found:
-	if (iter->handler
-		? iter->handler (ctx)
-		: execute (ctx, iter->script))
+	struct item *body = var (ctx, name);
+	if (!body) {
+		struct native_fn *fn;
+		for (fn = g_native; fn; fn = fn->next)
+			if (!strcmp (name, fn->name))
+				break;
+		if (!fn)
+			return set_error (ctx, "unknown function: %s", name);
+		if (fn->handler (ctx))
+			return true;
+	} else if (body->type == ITEM_STRING) {
+		return set_error (ctx, "strings aren't callable: %s", name);
+	} else if (execute (ctx, body))
 		return true;
 
 	// In this case, `error' is NULL
@@ -719,64 +764,38 @@ found:
 	return false;
 }
 
-static void
-free_function (struct fn *fn) {
-	item_free_list (fn->script);
-	free (fn);
-}
+static struct item *execute (struct context *ctx, struct item *script);
 
-static void
-unregister_function (const char *name) {
-	for (struct fn **iter = &g_functions; *iter; iter = &(*iter)->next)
-		if (!strcmp ((*iter)->name, name)) {
-			struct fn *tmp = *iter;
-			*iter = tmp->next;
-			free_function (tmp);
-			break;
-		}
-}
-
-static struct fn *
-prepend_new_fn (const char *name) {
-	struct fn *fn = calloc (1, sizeof *fn + strlen (name) + 1);
-	if (!fn)
+static struct item *
+execute_one (struct context *ctx, struct item *statement) {
+	if (!statement->head)
 		return NULL;
 
-	strcpy (fn->name, name);
-	fn->next = g_functions;
-	return g_functions = fn;
-}
-
-static bool
-register_handler (const char *name, handler_fn handler) {
-	unregister_function (name);
-	struct fn *fn = prepend_new_fn (name);
-	if (!fn)
-		return false;
-	fn->handler = handler;
-	return true;
-}
-
-static bool
-register_script (const char *name, struct item *script) {
-	unregister_function (name);
-	struct fn *fn = prepend_new_fn (name);
-	if (!fn)
-		return false;
-	fn->script = script;
-	return true;
-}
-
-static bool
-execute (struct context *ctx, struct item *script) {
-	for (; script; script = script->next) {
-		// TODO: this should be a list
-		//   -> if the first item is a STRING, resolve it
-		//   -> but handle special forms
-		//   -> assign the rest of the items to variables
-		//   -> recurse
+	struct item *fn = statement->head->head;
+	if (statement->head->type == ITEM_STRING) {
+		if (!strcmp (statement->head->value, "quote")) {
+			return statement->head->next;
+		} else if (!strcmp (statement->head->value, "arg")) {
+			// TODO: rename \d+ variables to arguments
+		} else {
+			// TODO: resolve the string
+			fn = NULL;
+		}
 	}
-	return true;
+	// TODO: assign the rest of items to variables
+	return execute (ctx, fn);
+}
+
+// Execute a block and return whatever the last statement returned
+static struct item *
+execute (struct context *ctx, struct item *script) {
+	struct item *result = NULL;
+	for (; script; script = script->next) {
+		assert (script->type == ITEM_LIST);
+		item_free_list (result);
+		result = execute_one (ctx, script);
+	}
+	return result;
 }
 
 // --- Runtime library ---------------------------------------------------------
@@ -784,37 +803,31 @@ execute (struct context *ctx, struct item *script) {
 #define defn(name) static bool name (struct context *ctx)
 
 static bool
-init_runtime_library_scripts (void) {
+init_runtime_library_scripts (struct context *ctx) {
 	bool ok = true;
 
 	// It's much cheaper (and more fun) to define functions in terms of other
 	// ones.  The "unit tests" serve a secondary purpose of showing the usage.
-	struct script {
+	struct {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
-	} scripts[] = {
+	} functions[] = {
 		{ "greet", "arg _name\n" "print (.. 'hello ' (.. @_name))" },
 	};
 
-	for (size_t i = 0; i < N_ELEMENTS (scripts); i++) {
+	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
 		char *e = NULL;
-		struct item *script = parse (scripts[i].definition,
-			strlen (scripts[i].definition), &e);
+		struct item *body = parse (functions[i].definition,
+			strlen (functions[i].definition), &e);
 		if (e) {
-			printf ("error parsing internal script `%s': %s\n",
-				scripts[i].definition, e);
+			printf ("error parsing internal function `%s': %s\n",
+				functions[i].definition, e);
 			free (e);
 			ok = false;
 		} else
-			ok &= register_script (scripts[i].name, script);
+			set (ctx, functions[i].name, body);
 	}
 	return ok;
-}
-
-static struct item *
-var (struct context *ctx, const char *name) {
-	// TODO: go through the "ctx->variables" list of lists and look for "name"
-	return NULL;
 }
 
 defn (fn_print) {
@@ -840,17 +853,16 @@ defn (fn_concatenate) {
 static bool
 init_runtime_library (void)
 {
-	return register_handler ("..",     fn_concatenate)
-		&& register_handler ("print",  fn_print)
-		&& init_runtime_library_scripts ();
+	return register_native ("..",     fn_concatenate)
+		&& register_native ("print",  fn_print);
 }
 
 static void
 free_runtime_library (void) {
-	struct fn *next, *iter;
-	for (iter = g_functions; iter; iter = next) {
+	struct native_fn *next, *iter;
+	for (iter = g_native; iter; iter = next) {
 		next = iter->next;
-		free_function (iter);
+		free (iter);
 	}
 }
 
@@ -858,9 +870,6 @@ free_runtime_library (void) {
 
 int
 main (int argc, char *argv[]) {
-	if (!init_runtime_library ())
-		printf ("%s\n", "runtime library initialization failed");
-
 	// TODO: load the entirety of stdin
 	const char *program = "print 'hello world\\n'";
 
@@ -874,8 +883,11 @@ main (int argc, char *argv[]) {
 
 	struct context ctx;
 	context_init (&ctx);
+	if (!init_runtime_library ()
+	 || !init_runtime_library_scripts (&ctx))
+		printf ("%s\n", "runtime library initialization failed");
 	ctx.user_data = NULL;
-	execute (&ctx, tree);
+	item_free_list (execute (&ctx, tree));
 	item_free_list (tree);
 
 	const char *failure = NULL;
