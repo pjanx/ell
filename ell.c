@@ -151,9 +151,9 @@ item_free_list (struct item *item) {
 
 static struct item *
 new_clone (const struct item *item) {
-	size_t size = sizeof *item;
+	size_t size = sizeof *item + 1;
 	if (item->type == ITEM_STRING)
-		size += item->len + 1;
+		size += item->len;
 
 	struct item *clone = malloc (size);
 	if (!clone)
@@ -202,7 +202,7 @@ new_string (const char *s, ssize_t len) {
 
 static struct item *
 new_list (struct item *head) {
-	struct item *item = calloc (1, sizeof *item);
+	struct item *item = calloc (1, sizeof *item + 1);
 	if (!item)
 		return NULL;
 
