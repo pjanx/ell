@@ -644,7 +644,7 @@ parse (const char *s, size_t len, char **e) {
 // --- Runtime -----------------------------------------------------------------
 
 struct context;
-typedef bool (*handler_fn) (struct context *);
+typedef bool (*handler_fn) (struct context *, struct item *, struct item **);
 
 struct native_fn {
 	struct native_fn *next;             ///< The next link in the chain
@@ -696,6 +696,42 @@ context_free (struct context *ctx) {
 	free (ctx->error);
 }
 
+static struct item *
+get (struct context *ctx, const char *name) {
+	for (struct item *iter = ctx->variables; iter; iter = iter->next)
+		if (!strcmp (iter->head->value, name))
+			return iter->head->next;
+	return NULL;
+}
+
+// FIXME: cloning and removing
+static bool
+set (struct context *ctx, const char *name, struct item *value) {
+	struct item *iter, *key = NULL, *pair = NULL;
+	for (iter = ctx->variables; iter; iter = iter->next)
+		if (!strcmp (iter->head->value, name))
+			break;
+	if (iter) {
+		item_free (iter->head->next);
+		iter->head->next = value;
+		return true;
+	}
+	if ((key = new_string (name, strlen (name)))
+	 && (pair = new_list (NULL))) {
+		(pair->head = key)->next = value;
+		pair->next = ctx->variables;
+		ctx->variables = pair;
+		return true;
+	} else {
+		item_free_list (key);
+		item_free_list (pair);
+		ctx->memory_failure = true;
+		return false;
+	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 static bool
 set_error (struct context *ctx, const char *format, ...) {
 	free (ctx->error);
@@ -710,48 +746,106 @@ set_error (struct context *ctx, const char *format, ...) {
 	return false;
 }
 
-static struct item *
-var (struct context *ctx, const char *name) {
-	for (struct item *iter = ctx->variables; iter; iter = iter->next)
-		if (!strcmp (iter->head->value, name))
-			return iter->head->next;
-	return NULL;
-}
-
-static void
-set (struct context *ctx, const char *name, struct item *value) {
-	for (struct item *iter = ctx->variables; iter; iter = iter->next)
-		if (!strcmp (iter->head->value, name)) {
-			item_free (iter->head->next);
-			iter->head->next = value;
-			return;
-		}
-	struct item *key = new_string (name, strlen (name));
-	key->next = value;
-	struct item *pair = new_list (key);
-	pair->next = ctx->variables;
-	ctx->variables = pair;
-}
-
-static struct item *execute (struct context *, struct item *);
-
 static bool
-call_function (struct context *ctx, const char *name) {
-	struct item *body = var (ctx, name);
-	if (!body) {
-		struct native_fn *fn;
-		for (fn = g_native; fn; fn = fn->next)
-			if (!strcmp (name, fn->name))
-				break;
-		if (!fn)
-			return set_error (ctx, "unknown function: %s", name);
-		if (fn->handler (ctx))
+rename_arguments (struct context *ctx, struct item *names) {
+	size_t i = 0;
+	for (; names; names = names->next) {
+		char buf[64];
+		(void) snprintf (buf, sizeof buf, "%zu", i++);
+		struct item *value = get (ctx, buf);
+
+		if (names->type != ITEM_STRING)
+			continue;
+		if (value)
+			set (ctx, names->value, new_clone (value));
+		else
+			set (ctx, names->value, NULL);
+	}
+	return true;
+}
+
+static bool execute (struct context *ctx, struct item *body, struct item **);
+
+// TODO: we should probably maintain arguments in a separate list,
+//   either that or at least remember the count so that we can reset them
+static bool
+execute_statement
+	(struct context *ctx, struct item *statement, struct item **result) {
+	if (statement->type == ITEM_STRING) {
+		if ((*result = new_clone (statement)))
 			return true;
-	} else if (body->type == ITEM_STRING) {
-		return set_error (ctx, "strings aren't callable: %s", name);
-	} else if (execute (ctx, body))
+		ctx->memory_failure = true;
+		return false;
+	}
+
+	// XXX: should this ever happen and what are the consequences?
+	//   Shouldn't we rather clone the empty list?
+	struct item *body;
+	if (!(body = statement->head))
 		return true;
 
+	const char *name = "(anonymous)";
+	if (body->type == ITEM_STRING) {
+		name = body->value;
+		if (!strcmp (name, "quote")) {
+			if ((*result = new_clone_list (body->next)))
+				return true;
+			ctx->memory_failure = true;
+			return false;
+		}
+		if (!strcmp (name, "arg"))
+			return rename_arguments (ctx, body->next);
+
+		if (!(body = get (ctx, body->value))) {
+			struct native_fn *fn;
+			for (fn = g_native; fn; fn = fn->next)
+				if (!strcmp (name, fn->name))
+					break;
+			if (!fn)
+				return set_error (ctx, "unknown function: %s", name);
+
+			struct item *args = NULL, **tail = &args;
+			for (struct item *arg = statement->head->next;
+				arg; arg = arg->next) {
+				struct item *evaluated = NULL;
+				if (!execute_statement (ctx, arg, &evaluated))
+					return false;
+
+				if (evaluated) {
+					item_free_list (evaluated->next);
+					evaluated->next = NULL;
+					*tail = evaluated;
+					tail = &evaluated->next;
+				}
+			}
+			bool ok = fn->handler (ctx, args, result);
+			item_free_list (args);
+			if (ok)
+				return true;
+			goto error;
+		}
+	}
+	// Recursion could be pretty fatal, let's not do that
+	if (body->type == ITEM_STRING)
+		return new_clone (body);
+
+	size_t i = 0;
+	for (struct item *arg = statement->head->next; arg; arg = arg->next) {
+		struct item *evaluated = NULL;
+		if (!execute_statement (ctx, arg, &evaluated))
+			return false;
+
+		item_free_list (evaluated->next);
+		evaluated->next = NULL;
+
+		char buf[64];
+		(void) snprintf (buf, sizeof buf, "%zu", i++);
+		set (ctx, buf, evaluated);
+	}
+	if (execute (ctx, body->head, result))
+		return true;
+
+error:
 	// In this case, `error' is NULL
 	if (ctx->memory_failure)
 		return false;
@@ -764,55 +858,32 @@ call_function (struct context *ctx, const char *name) {
 	return false;
 }
 
-static struct item *execute (struct context *ctx, struct item *script);
-
-static struct item *
-execute_one (struct context *ctx, struct item *statement) {
-	if (!statement->head)
-		return NULL;
-
-	struct item *fn = statement->head->head;
-	if (statement->head->type == ITEM_STRING) {
-		if (!strcmp (statement->head->value, "quote")) {
-			return statement->head->next;
-		} else if (!strcmp (statement->head->value, "arg")) {
-			// TODO: rename \d+ variables to arguments
-		} else {
-			// TODO: resolve the string
-			fn = NULL;
-		}
-	}
-	// TODO: assign the rest of items to variables
-	return execute (ctx, fn);
-}
-
 // Execute a block and return whatever the last statement returned
-static struct item *
-execute (struct context *ctx, struct item *script) {
-	struct item *result = NULL;
-	for (; script; script = script->next) {
-		assert (script->type == ITEM_LIST);
-		item_free_list (result);
-		result = execute_one (ctx, script);
+static bool
+execute (struct context *ctx, struct item *body, struct item **result) {
+	for (; body; body = body->next) {
+		item_free_list (*result);
+		*result = NULL;
+		if (!execute_statement (ctx, body, result))
+			return false;
 	}
-	return result;
+	return true;
 }
 
 // --- Runtime library ---------------------------------------------------------
 
-#define defn(name) static bool name (struct context *ctx)
+#define defn(name) static bool name \
+	(struct context *ctx, struct item *args, struct item **result)
 
 static bool
 init_runtime_library_scripts (struct context *ctx) {
 	bool ok = true;
 
-	// It's much cheaper (and more fun) to define functions in terms of other
-	// ones.  The "unit tests" serve a secondary purpose of showing the usage.
 	struct {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} functions[] = {
-		{ "greet", "arg _name\n" "print (.. 'hello ' (.. @_name))" },
+		{ "greet", "arg _name\n" "print (.. 'hello ' @_name '\\n')" },
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
@@ -830,9 +901,25 @@ init_runtime_library_scripts (struct context *ctx) {
 	return ok;
 }
 
+defn (fn_set) {
+	struct item *name = args;
+	if (!name || name->type != ITEM_STRING)
+		return (void *) set_error (ctx, "first argument must be string");
+
+	struct item *value;
+	if ((value = name->next))
+		return set (ctx, name->value, value);
+
+	// FIXME: how do we represent a nil value here?
+	*result = get (ctx, name->value);
+	return true;
+}
+
 defn (fn_print) {
+	(void) result;
+
 	struct buffer buf = BUFFER_INITIALIZER;
-	struct item *item = var (ctx, "1");
+	struct item *item = args;
 	buffer_append (&buf, item->value, item->len);
 	buffer_append_c (&buf, '\0');
 	if (buf.memory_failure) {
@@ -846,7 +933,17 @@ defn (fn_print) {
 }
 
 defn (fn_concatenate) {
-	// TODO: concatenate string arguments, error on list
+	// TODO: error on list
+	struct buffer buf = BUFFER_INITIALIZER;
+	for (; args; args = args->next)
+		buffer_append (&buf, args->value, args->len);
+	buffer_append_c (&buf, '\0');
+	if (buf.memory_failure) {
+		ctx->memory_failure = true;
+		return false;
+	}
+	*result = new_string (buf.s, buf.len);
+	free (buf.s);
 	return true;
 }
 
@@ -854,6 +951,7 @@ static bool
 init_runtime_library (void)
 {
 	return register_native ("..",     fn_concatenate)
+		&& register_native ("set",    fn_set)
 		&& register_native ("print",  fn_print);
 }
 
@@ -871,7 +969,7 @@ free_runtime_library (void) {
 int
 main (int argc, char *argv[]) {
 	// TODO: load the entirety of stdin
-	const char *program = "print 'hello world\\n'";
+	const char *program = "greet 'world'";
 
 	char *e = NULL;
 	struct item *tree = parse (program, strlen (program), &e);
@@ -887,7 +985,9 @@ main (int argc, char *argv[]) {
 	 || !init_runtime_library_scripts (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
 	ctx.user_data = NULL;
-	item_free_list (execute (&ctx, tree));
+	struct item *result = NULL;
+	(void) execute (&ctx, tree->head, &result);
+	item_free_list (result);
 	item_free_list (tree);
 
 	const char *failure = NULL;

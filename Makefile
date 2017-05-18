@@ -1,4 +1,4 @@
-CFLAGS = -std=gnu99 -Wall
+CFLAGS = -std=gnu99 -Wall -Wextra -ggdb
 all: ell
 ell: ell.c
 	$(CC) $(CFLAGS) $< -o $@
