@@ -428,6 +428,41 @@ lexer_next (struct lexer *self, char **e) {
 
 // --- Parsing -----------------------------------------------------------------
 
+static void
+print_string (const char *s) {
+	putc ('\'', stdout);
+	for (; *s; s++)
+		if      (*s == '\n') printf ("\\n");
+		else if (*s == '\\') putc ('\\', stdout);
+		else                 putc (*s, stdout);
+	putc ('\'', stdout);
+}
+
+static void
+print_tree (struct item *tree, int level) {
+	// TODO: also re-add syntax sugar
+	for (struct item *iter = tree; iter; iter = iter->next) {
+		if (iter != tree)
+			printf ("%*s", level, "");
+		if (iter->type == ITEM_STRING) {
+			print_string (iter->value);
+		} else if (iter->head->type == ITEM_STRING
+			&& !strcmp (iter->head->value, "list")) {
+			printf ("[");
+			print_tree (iter->head->next, level + 1);
+			printf ("]");
+		} else {
+			printf ("(");
+			print_tree (iter->head, level + 1);
+			printf (")");
+		}
+		if (iter->next)
+			printf ("\n");
+	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 struct parser
 {
 	struct lexer lexer;                 ///< Tokenizer
@@ -461,15 +496,6 @@ parser_peek (struct parser *self, jmp_buf out) {
 		if (self->error)
 			longjmp (out, 1);
 		self->replace_token = false;
-
-#ifndef NDEBUG
-		if (self->token == T_STRING) {
-			buffer_append_c (&self->lexer.string, 0);
-			printf ("'%s'\n", self->lexer.string.s);
-		} else {
-			printf ("%s\n", token_name (self->token));
-		}
-#endif
 	}
 	return self->token;
 }
@@ -607,6 +633,11 @@ parse (const char *s, size_t len, char **e) {
 	parser_expect (&parser, T_ABORT, err);
 
 	parser_free (&parser);
+#ifndef NDEBUG
+	printf ("\x1b[1m%s\x1b[0m\n", s);
+	print_tree (result, 0);
+	printf ("\n\n");
+#endif
 	return new_list (result);
 }
 
@@ -762,7 +793,7 @@ init_runtime_library_scripts (void) {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} scripts[] = {
-		{ "greet", "arg _name \n print (.. 'hello ' (.. @_name))" },
+		{ "greet", "arg _name\n" "print (.. 'hello ' (.. @_name))" },
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (scripts); i++) {
@@ -825,26 +856,16 @@ free_runtime_library (void) {
 
 // --- Main --------------------------------------------------------------------
 
-static void
-print_tree (struct item *tree) {
-	// TODO: first figure out how to just print the tree
-	// TODO: also re-add syntax sugar
-	for (; tree; tree = tree->next) {
-	}
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 int
 main (int argc, char *argv[]) {
 	if (!init_runtime_library ())
 		printf ("%s\n", "runtime library initialization failed");
 
-	// TODO: load the entirety of stdin and execute it
-	const char *program = "print 'hello world\n'";
+	// TODO: load the entirety of stdin
+	const char *program = "print 'hello world\\n'";
 
 	char *e = NULL;
-	struct item *script = parse (program, strlen (program), &e);
+	struct item *tree = parse (program, strlen (program), &e);
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
 		free (e);
@@ -854,8 +875,8 @@ main (int argc, char *argv[]) {
 	struct context ctx;
 	context_init (&ctx);
 	ctx.user_data = NULL;
-	execute (&ctx, script);
-	item_free_list (script);
+	execute (&ctx, tree);
+	item_free_list (tree);
 
 	const char *failure = NULL;
 	if (ctx.memory_failure)
