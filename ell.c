@@ -270,8 +270,10 @@ lexer_free (struct lexer *self) {
 	free (self->string.s);
 }
 
-// FIXME: other isspace() stuff is missing
-static bool lexer_is_word_char (int c) { return !strchr ("()[]{}\n@#' ", c); }
+static bool lexer_is_ignored (int c) { return c == ' ' || c == '\t'; }
+static bool lexer_is_word_char (int c) {
+	return !lexer_is_ignored (c) && !strchr ("()[]{}\n@#' ", c);
+}
 
 static int
 lexer_advance (struct lexer *self) {
@@ -286,11 +288,10 @@ lexer_advance (struct lexer *self) {
 	return c;
 }
 
-static void lexer_error (struct lexer *self, char **e, const char *fmt, ...)
+static bool lexer_error (struct lexer *self, char **e, const char *fmt, ...)
 	ATTRIBUTE_PRINTF (3, 4);
 
-// TODO: see "script", we can just use error constants to avoid allocation
-static void
+static bool
 lexer_error (struct lexer *self, char **e, const char *fmt, ...) {
 	va_list ap;
 	va_start (ap, fmt);
@@ -300,11 +301,12 @@ lexer_error (struct lexer *self, char **e, const char *fmt, ...) {
 	*e = format ("near line %u, column %u: %s",
 		self->line + 1, self->column + 1, description);
 
-	// TODO: see above, we should be able to indicate error without allocation
+	// TODO: see "script", we can just use error constants to avoid allocation
 	if (!*e)
 		abort ();
 
 	free (description);
+	return false;
 }
 
 static bool
@@ -333,10 +335,8 @@ lexer_hexa_escape (struct lexer *self, struct buffer *output) {
 
 static bool
 lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
-	if (!self->len) {
-		lexer_error (self, e, "premature end of escape sequence");
-		return false;
-	}
+	if (!self->len)
+		return lexer_error (self, e, "premature end of escape sequence");
 
 	unsigned char c = *self->p;
 	switch (c) {
@@ -356,12 +356,10 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
 		if (lexer_hexa_escape (self, output))
 			return true;
 
-		lexer_error (self, e, "invalid hexadecimal escape");
-		return false;
+		return lexer_error (self, e, "invalid hexadecimal escape");
 
 	default:
-		lexer_error (self, e, "unknown escape sequence");
-		return false;
+		return lexer_error (self, e, "unknown escape sequence");
 	}
 
 	buffer_append_c (output, c);
@@ -380,14 +378,13 @@ lexer_string (struct lexer *self, struct buffer *output, char **e) {
 		else if (!lexer_escape_sequence (self, output, e))
 			return false;
 	}
-	lexer_error (self, e, "premature end of string");
-	return false;
+	return lexer_error (self, e, "premature end of string");
 }
 
 static enum token
 lexer_next (struct lexer *self, char **e) {
 	// Skip over any whitespace between tokens
-	while (self->len && isspace (*self->p) && *self->p != '\n')
+	while (self->len && lexer_is_ignored (*self->p))
 		lexer_advance (self);
 	if (!self->len)
 		return T_ABORT;
@@ -427,6 +424,8 @@ lexer_next (struct lexer *self, char **e) {
 }
 
 // --- Parsing -----------------------------------------------------------------
+
+// FIXME: the parser generally ignores memory allocation errors
 
 static void
 print_string (const char *s) {
@@ -675,6 +674,9 @@ register_native (const char *name, handler_fn handler) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+// TODO: fill in "error_is_fatal"
+// TODO: probably add new_*() methods that set "memory_failure"
+
 struct context {
 	struct item *variables;             ///< List of variables
 
@@ -704,7 +706,6 @@ get (struct context *ctx, const char *name) {
 	return NULL;
 }
 
-// FIXME: cloning and removing
 static bool
 set (struct context *ctx, const char *name, struct item *value) {
 	struct item *iter, *key = NULL, *pair = NULL;
@@ -713,12 +714,19 @@ set (struct context *ctx, const char *name, struct item *value) {
 			break;
 	if (iter) {
 		item_free (iter->head->next);
-		iter->head->next = value;
+		if (!(iter->head->next = new_clone (value))) {
+			ctx->memory_failure = true;
+			return false;
+		}
 		return true;
 	}
 	if ((key = new_string (name, strlen (name)))
 	 && (pair = new_list (NULL))) {
-		(pair->head = key)->next = value;
+		if (!((pair->head = key)->next = new_clone (value))) {
+			item_free (pair);
+			ctx->memory_failure = true;
+			return false;
+		}
 		pair->next = ctx->variables;
 		ctx->variables = pair;
 		return true;
@@ -756,10 +764,12 @@ rename_arguments (struct context *ctx, struct item *names) {
 
 		if (names->type != ITEM_STRING)
 			continue;
-		if (value)
-			set (ctx, names->value, new_clone (value));
-		else
-			set (ctx, names->value, NULL);
+		if (value && !(value = new_clone (value))) {
+			ctx->memory_failure = true;
+			return false;
+		}
+		if (!set (ctx, names->value, value))
+			return false;
 	}
 	return true;
 }

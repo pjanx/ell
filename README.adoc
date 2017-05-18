@@ -47,7 +47,7 @@ Runtime
 -------
 All variables are put in a single global namespace with no further scoping.
 When calling a command (which is a list of lists), all arguments are
-automatically stored in variables named 1, 2, 3, ... n.  They are however
+automatically stored in variables named 0, 1, 2, 3, ... n.  They are however
 effectively inaccessible and you must rename them first using the `arg` special
 form.
 
