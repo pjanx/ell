@@ -203,8 +203,10 @@ new_string (const char *s, ssize_t len) {
 static struct item *
 new_list (struct item *head) {
 	struct item *item = calloc (1, sizeof *item + 1);
-	if (!item)
+	if (!item) {
+		item_free_list (head);
 		return NULL;
+	}
 
 	item->type = ITEM_LIST;
 	item->head = head;
@@ -453,6 +455,7 @@ struct parser
 	char *error;                        ///< Tokenizer error
 	enum token token;                   ///< Current token in the lexer
 	bool replace_token;                 ///< Replace the token
+	bool memory_failure;                ///< Memory allocation failed
 };
 
 static void
@@ -478,11 +481,13 @@ parser_peek (struct parser *self, jmp_buf out) {
 		const char *e = NULL;
 		self->token = lexer_next (&self->lexer, &e);
 		if (e) {
-			// TODO: check memory error
-			self->error = lexer_errorf (&self->lexer, "%s", e);
+			self->memory_failure =
+				!(self->error = lexer_errorf (&self->lexer, "%s", e));
 			longjmp (out, 1);
 		}
-		// TODO: with T_STRING check for memory error within
+		if (self->token == T_STRING
+		 && (self->memory_failure = self->lexer.string.memory_failure))
+			longjmp (out, 1);
 		self->replace_token = false;
 	}
 	return self->token;
@@ -498,10 +503,9 @@ parser_expect (struct parser *self, enum token token, jmp_buf out) {
 	if (parser_accept (self, token, out))
 		return;
 
-	// TODO: check memory error
-	self->error = lexer_errorf (&self->lexer, "unexpected `%s', expected `%s'",
-		token_name (self->token),
-		token_name (token));
+	self->memory_failure = !(self->error = lexer_errorf (&self->lexer,
+		"unexpected `%s', expected `%s'",
+		token_name (self->token), token_name (token)));
 	longjmp (out, 1);
 }
 
@@ -515,24 +519,37 @@ parser_expect (struct parser *self, enum token token, jmp_buf out) {
 #define EXPECT(token)  parser_expect (self, token, err)
 #define SKIP_NL()      do {} while (ACCEPT (T_NEWLINE))
 
+static struct item *
+parser_check (struct parser *self, struct item *item, jmp_buf out) {
+	if (!item) {
+		self->memory_failure = true;
+		longjmp (out, 1);
+	}
+	return item;
+}
+
+// Beware that this jumps to the "out" buffer directly
+#define CHECK(item)    parser_check (self, (item), out)
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static struct item *
+parse_prefix_list (struct item *list, const char *name) {
+	struct item *prefix;
+	if (!(prefix = new_string (name, strlen (name)))) {
+		item_free_list (list);
+		return NULL;
+	}
+	prefix->next = list;
+	return new_list (prefix);
+}
 
 static struct item * parse_line (struct parser *self, jmp_buf out);
 
 static struct item *
-parse_prefix_list (struct item *list, const char *name) {
-	// TODO: check memory error
-	struct item *prefix = new_string (name, strlen (name));
-	prefix->next = list;
-	// TODO: check memory error
-	return new_list (prefix);
-}
-
-static struct item *
 parse_item (struct parser *self, jmp_buf out) {
-	struct item *volatile result = NULL, *volatile *tail = &result;
 	jmp_buf err;
-
+	struct item *volatile result = NULL, *volatile *tail = &result;
 	if (setjmp (err)) {
 		item_free_list (result);
 		longjmp (out, 1);
@@ -540,48 +557,43 @@ parse_item (struct parser *self, jmp_buf out) {
 
 	SKIP_NL ();
 	if (ACCEPT (T_STRING))
-		// TODO: check memory error, also in "self->lexer.string"
-		return new_string (self->lexer.string.s, self->lexer.string.len);
+		return CHECK (new_string
+			(self->lexer.string.s, self->lexer.string.len));
 	if (ACCEPT (T_AT)) {
 		result = parse_item (self, out);
-		return parse_prefix_list (result, "set");
+		return CHECK (parse_prefix_list (result, "set"));
 	}
 	if (ACCEPT (T_LPAREN)) {
 		while (!ACCEPT (T_RPAREN)) {
-			*tail = parse_item (self, err);
-			tail = &(*tail)->next;
+			tail = &(*tail = parse_item (self, err))->next;
 			SKIP_NL ();
 		}
-		// TODO: check memory error
-		return new_list (result);
+		return CHECK (new_list (result));
 	}
 	if (ACCEPT (T_LBRACKET)) {
 		while (!ACCEPT (T_RBRACKET)) {
-			*tail = parse_item (self, err);
-			tail = &(*tail)->next;
+			tail = &(*tail = parse_item (self, err))->next;
 			SKIP_NL ();
 		}
-		return parse_prefix_list (result, "list");
+		return CHECK (parse_prefix_list (result, "list"));
 	}
 	if (ACCEPT (T_LBRACE)) {
 		while ((*tail = parse_line (self, err)))
 			tail = &(*tail)->next;
 		EXPECT (T_RBRACE);
-		// TODO: check memory error
-		return parse_prefix_list (new_list (result), "quote");
+		result = CHECK (new_list (result));
+		return CHECK (parse_prefix_list (result, "quote"));
 	}
 
-	// TODO: check memory error
-	self->error = lexer_errorf (&self->lexer,
-		"unexpected `%s', expected a value", token_name (self->token));
+	self->memory_failure = !(self->error = lexer_errorf (&self->lexer,
+		"unexpected `%s', expected a value", token_name (self->token)));
 	longjmp (out, 1);
 }
 
 static struct item *
 parse_line (struct parser *self, jmp_buf out) {
-	struct item *volatile result = NULL, *volatile *tail = &result;
 	jmp_buf err;
-
+	struct item *volatile result = NULL, *volatile *tail = &result;
 	if (setjmp (err)) {
 		item_free_list (result);
 		longjmp (out, 1);
@@ -589,16 +601,13 @@ parse_line (struct parser *self, jmp_buf out) {
 
 	while (PEEK () != T_RBRACE && PEEK () != T_ABORT) {
 		if (!ACCEPT (T_NEWLINE)) {
-			*tail = parse_item (self, err);
-			tail = &(*tail)->next;
+			tail = &(*tail = parse_item (self, err))->next;
 		} else if (result) {
-			// TODO: check memory error
-			return new_list (result);
+			return CHECK (new_list (result));
 		}
 	}
 	if (result)
-		// TODO: check memory error
-		return new_list (result);
+		return CHECK (new_list (result));
 	return NULL;
 }
 
@@ -608,19 +617,25 @@ parse_line (struct parser *self, jmp_buf out) {
 #undef ACCEPT
 #undef EXPECT
 #undef SKIP_NL
+#undef CHECK
 
 static struct item *
 parse (const char *s, size_t len, char **e) {
 	struct parser parser;
 	parser_init (&parser, s, len);
 
-	struct item *volatile result = NULL, *volatile *tail = &result;
 	jmp_buf err;
-
+	struct item *volatile result = NULL, *volatile *tail = &result;
 	if (setjmp (err)) {
 		item_free_list (result);
 		*e = parser.error;
 		lexer_free (&parser.lexer);
+
+		// TODO: figure out how to handle this, since the return value
+		//   may be null and we may not be able to allocate an error message
+		if (parser.memory_failure)
+			abort ();
+
 		return NULL;
 	}
 
@@ -917,6 +932,7 @@ init_runtime_library_scripts (struct context *ctx) {
 		char *e = NULL;
 		struct item *body = parse (functions[i].definition,
 			strlen (functions[i].definition), &e);
+		// TODO: also handle memory allocation errors
 		if (e) {
 			printf ("error parsing internal function `%s': %s\n",
 				functions[i].definition, e);
