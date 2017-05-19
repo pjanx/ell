@@ -620,35 +620,22 @@ parse_line (struct parser *self, jmp_buf out) {
 #undef CHECK
 
 static struct item *
-parse (const char *s, size_t len, char **e) {
-	struct parser parser;
-	parser_init (&parser, s, len);
-
+parser_run (struct parser *self, const char **e) {
 	jmp_buf err;
 	struct item *volatile result = NULL, *volatile *tail = &result;
 	if (setjmp (err)) {
 		item_free_list (result);
-		*e = parser.error;
-		lexer_free (&parser.lexer);
-
-		// TODO: figure out how to handle this, since the return value
-		//   may be null and we may not be able to allocate an error message
-		if (parser.memory_failure)
-			abort ();
-
+		if (e) {
+			*e = self->error;
+			if (self->memory_failure)
+				*e = "memory allocation failure";
+		}
 		return NULL;
 	}
 
-	while ((*tail = parse_line (&parser, err)))
+	while ((*tail = parse_line (self, err)))
 		tail = &(*tail)->next;
-	parser_expect (&parser, T_ABORT, err);
-
-	parser_free (&parser);
-#ifndef NDEBUG
-	printf ("\x1b[1m%s\x1b[0m\n", s);
-	print_tree (result, 0);
-	printf ("\n\n");
-#endif
+	parser_expect (self, T_ABORT, err);
 	return result;
 }
 
@@ -929,17 +916,18 @@ init_runtime_library_scripts (struct context *ctx) {
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
-		char *e = NULL;
-		struct item *body = parse (functions[i].definition,
-			strlen (functions[i].definition), &e);
-		// TODO: also handle memory allocation errors
+		struct parser parser;
+		parser_init (&parser,
+			functions[i].definition, strlen (functions[i].definition));
+		const char *e = NULL;
+		struct item *body = parser_run (&parser, &e);
 		if (e) {
 			printf ("error parsing internal function `%s': %s\n",
-				functions[i].definition, e);
-			free (e);
+				functions[i].name, e);
 			ok = false;
 		} else
 			ok &= set (ctx, functions[i].name, body);
+		parser_free (&parser);
 	}
 	return ok;
 }
@@ -1025,14 +1013,23 @@ main (int argc, char *argv[]) {
 	buffer_append_c (&buf, 0);
 	fclose (fp);
 
-	char *e = NULL;
-	struct item *program = parse (buf.s, buf.len, &e);
+	struct parser parser;
+	parser_init (&parser, buf.s, buf.len - 1);
+	const char *e = NULL;
+	struct item *program = parser_run (&parser, &e);
 	free (buf.s);
+
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
-		free (e);
 		return 1;
 	}
+
+#ifndef NDEBUG
+	printf ("\x1b[1m%s\x1b[0m\n", buf.s);
+	print_tree (program, 0);
+	printf ("\n\n");
+#endif
+	parser_free (&parser);
 
 	struct context ctx;
 	context_init (&ctx);
