@@ -277,12 +277,6 @@ lexer_advance (struct lexer *self) {
 	return c;
 }
 
-static inline bool
-lexer_error (const char **e, const char *message) {
-	*e = message;
-	return false;
-}
-
 static bool
 lexer_hexa_escape (struct lexer *self, struct buffer *output) {
 	int i;
@@ -307,11 +301,10 @@ lexer_hexa_escape (struct lexer *self, struct buffer *output) {
 	return true;
 }
 
-static bool
-lexer_escape_sequence (struct lexer *self, struct buffer *output,
-	const char **e) {
+static const char *
+lexer_escape_sequence (struct lexer *self, struct buffer *output) {
 	if (!self->len)
-		return lexer_error (e, "premature end of escape sequence");
+		return "premature end of escape sequence";
 
 	unsigned char c = *self->p;
 	switch (c) {
@@ -329,30 +322,31 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output,
 	case 'X':
 		lexer_advance (self);
 		if (lexer_hexa_escape (self, output))
-			return true;
-		return lexer_error (e, "invalid hexadecimal escape");
+			return NULL;
+		return "invalid hexadecimal escape";
 
 	default:
-		return lexer_error (e, "unknown escape sequence");
+		return "unknown escape sequence";
 	}
 
 	buffer_append_c (output, c);
 	lexer_advance (self);
-	return true;
+	return NULL;
 }
 
-static bool
-lexer_string (struct lexer *self, struct buffer *output, const char **e) {
+static const char *
+lexer_string (struct lexer *self, struct buffer *output) {
 	unsigned char c;
+	const char *e = NULL;
 	while (self->len) {
 		if ((c = lexer_advance (self)) == '\'')
-			return true;
+			return NULL;
 		if (c != '\\')
 			buffer_append_c (output, c);
-		else if (!lexer_escape_sequence (self, output, e))
-			return false;
+		else if ((e = lexer_escape_sequence (self, output)))
+			return e;
 	}
-	return lexer_error (e, "premature end of string");
+	return "premature end of string";
 }
 
 static enum token
@@ -385,7 +379,7 @@ lexer_next (struct lexer *self, const char **e) {
 
 	case '\'':
 		lexer_advance (self);
-		if (!lexer_string (self, &self->string, e))
+		if ((*e = lexer_string (self, &self->string)))
 			return T_ABORT;
 		return T_STRING;
 	}
