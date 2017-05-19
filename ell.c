@@ -172,14 +172,13 @@ new_clone (const struct item *item) {
 
 static struct item *
 new_clone_list (const struct item *item) {
-	struct item *head = NULL, *clone;
+	struct item *head = NULL;
 	for (struct item **out = &head; item; item = item->next) {
-		if (!(clone = *out = new_clone (item))) {
+		if (!(*out = new_clone (item))) {
 			item_free_list (head);
 			return NULL;
 		}
-		clone->next = NULL;
-		out = &clone->next;
+		out = &(*out)->next;
 	}
 	return head;
 }
@@ -218,26 +217,18 @@ new_list (struct item *head) {
 enum token { T_ABORT,  T_LPAREN, T_RPAREN, T_LBRACKET, T_RBRACKET,
 	T_LBRACE, T_RBRACE, T_STRING, T_NEWLINE, T_AT };
 
-static const char *
-token_name (enum token token) {
-	switch (token) {
-	case T_ABORT:    return "end of input";
-
-	case T_LPAREN:   return "left parenthesis";
-	case T_RPAREN:   return "right parenthesis";
-	case T_LBRACKET: return "left bracket";
-	case T_RBRACKET: return "right bracket";
-	case T_LBRACE:   return "left brace";
-	case T_RBRACE:   return "right brace";
-	case T_STRING:   return "string";
-	case T_NEWLINE:  return "newline";
-	case T_AT:       return "at symbol";
-
-	default:
-		abort ();
-		return NULL;
-	}
-}
+static const char *token_names[] = {
+	[T_ABORT]    = "end of input",
+	[T_LPAREN]   = "left parenthesis",
+	[T_RPAREN]   = "right parenthesis",
+	[T_LBRACKET] = "left bracket",
+	[T_RBRACKET] = "right bracket",
+	[T_LBRACE]   = "left brace",
+	[T_RBRACE]   = "right brace",
+	[T_STRING]   = "string",
+	[T_NEWLINE]  = "newline",
+	[T_AT]       = "at symbol",
+};
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -449,8 +440,7 @@ print_tree (struct item *tree, int level) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-struct parser
-{
+struct parser {
 	struct lexer lexer;                 ///< Tokenizer
 	char *error;                        ///< Tokenizer error
 	enum token token;                   ///< Current token in the lexer
@@ -505,7 +495,7 @@ parser_expect (struct parser *self, enum token token, jmp_buf out) {
 
 	self->memory_failure = !(self->error = lexer_errorf (&self->lexer,
 		"unexpected `%s', expected `%s'",
-		token_name (self->token), token_name (token)));
+		token_names[self->token], token_names[token]));
 	longjmp (out, 1);
 }
 
@@ -586,7 +576,7 @@ parse_item (struct parser *self, jmp_buf out) {
 	}
 
 	self->memory_failure = !(self->error = lexer_errorf (&self->lexer,
-		"unexpected `%s', expected a value", token_name (self->token)));
+		"unexpected `%s', expected a value", token_names[self->token]));
 	longjmp (out, 1);
 }
 
@@ -820,7 +810,8 @@ execute_args (struct context *ctx, struct item *next) {
 	size_t i = 0;
 	for (struct item *arg = args; arg; arg = arg->next) {
 		(void) snprintf (buf, sizeof buf, "%zu", i++);
-		set (ctx, buf, arg);
+		if (!set (ctx, buf, arg))
+			return false;
 	}
 	item_free_list (args);
 	return true;
@@ -848,7 +839,7 @@ execute_statement
 		name = body->value;
 		// TODO: these could be just regular handlers, only top priority
 		if (!strcmp (name, "quote")) {
-			if ((*result = new_clone_list (following)))
+			if (!following || (*result = new_clone_list (following)))
 				return true;
 			ctx->memory_failure = true;
 			return false;
@@ -881,7 +872,6 @@ execute_statement
 
 	// This creates some form of a stack trace
 	char *tmp = ctx->error;
-	ctx->error = NULL;
 	set_error (ctx, "%s -> %s", name, tmp);
 	free (tmp);
 	return false;
@@ -1042,11 +1032,9 @@ main (int argc, char *argv[]) {
 	item_free_list (result);
 	item_free_list (program);
 
-	const char *failure = NULL;
+	const char *failure = ctx.error;
 	if (ctx.memory_failure)
 		failure = "memory allocation failure";
-	else if (ctx.error)
-		failure = ctx.error;
 	if (failure)
 		printf ("%s: %s\n", "runtime error", failure);
 	context_free (&ctx);
