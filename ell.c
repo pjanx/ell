@@ -213,19 +213,8 @@ new_list (struct item *head) {
 
 // --- Lexer -------------------------------------------------------------------
 
-enum token {
-	T_ABORT,                            ///< EOF or error
-
-	T_LPAREN,                           ///< Left parenthesis
-	T_RPAREN,                           ///< Right parenthesis
-	T_LBRACKET,                         ///< Left bracket
-	T_RBRACKET,                         ///< Right bracket
-	T_LBRACE,                           ///< Left curly bracket
-	T_RBRACE,                           ///< Right curly bracket
-	T_STRING,                           ///< Everything else that's not space
-	T_NEWLINE,                          ///< New line
-	T_AT                                ///< At symbol
-};
+enum token { T_ABORT,  T_LPAREN, T_RPAREN, T_LBRACKET, T_RBRACKET,
+	T_LBRACE, T_RBRACE, T_STRING, T_NEWLINE, T_AT };
 
 static const char *
 token_name (enum token token) {
@@ -489,8 +478,7 @@ parser_free (struct parser *self) {
 
 static enum token
 parser_peek (struct parser *self, jmp_buf out) {
-	if (self->replace_token)
-	{
+	if (self->replace_token) {
 		self->token = lexer_next (&self->lexer, &self->error);
 		if (self->error)
 			longjmp (out, 1);
