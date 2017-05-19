@@ -277,24 +277,9 @@ lexer_advance (struct lexer *self) {
 	return c;
 }
 
-static bool lexer_error (struct lexer *self, char **e, const char *fmt, ...)
-	ATTRIBUTE_PRINTF (3, 4);
-
-static bool
-lexer_error (struct lexer *self, char **e, const char *fmt, ...) {
-	va_list ap;
-	va_start (ap, fmt);
-	char *description = vformat (fmt, ap);
-	va_end (ap);
-
-	*e = format ("near line %u, column %u: %s",
-		self->line + 1, self->column + 1, description);
-
-	// TODO: see "script", we can just use error constants to avoid allocation
-	if (!*e)
-		abort ();
-
-	free (description);
+static inline bool
+lexer_error (const char **e, const char *message) {
+	*e = message;
 	return false;
 }
 
@@ -323,9 +308,10 @@ lexer_hexa_escape (struct lexer *self, struct buffer *output) {
 }
 
 static bool
-lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
+lexer_escape_sequence (struct lexer *self, struct buffer *output,
+	const char **e) {
 	if (!self->len)
-		return lexer_error (self, e, "premature end of escape sequence");
+		return lexer_error (e, "premature end of escape sequence");
 
 	unsigned char c = *self->p;
 	switch (c) {
@@ -344,11 +330,10 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
 		lexer_advance (self);
 		if (lexer_hexa_escape (self, output))
 			return true;
-
-		return lexer_error (self, e, "invalid hexadecimal escape");
+		return lexer_error (e, "invalid hexadecimal escape");
 
 	default:
-		return lexer_error (self, e, "unknown escape sequence");
+		return lexer_error (e, "unknown escape sequence");
 	}
 
 	buffer_append_c (output, c);
@@ -357,7 +342,7 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output, char **e) {
 }
 
 static bool
-lexer_string (struct lexer *self, struct buffer *output, char **e) {
+lexer_string (struct lexer *self, struct buffer *output, const char **e) {
 	unsigned char c;
 	while (self->len) {
 		if ((c = lexer_advance (self)) == '\'')
@@ -367,11 +352,11 @@ lexer_string (struct lexer *self, struct buffer *output, char **e) {
 		else if (!lexer_escape_sequence (self, output, e))
 			return false;
 	}
-	return lexer_error (self, e, "premature end of string");
+	return lexer_error (e, "premature end of string");
 }
 
 static enum token
-lexer_next (struct lexer *self, char **e) {
+lexer_next (struct lexer *self, const char **e) {
 	// Skip over any whitespace between tokens
 	while (self->len && lexer_is_ignored (*self->p))
 		lexer_advance (self);
@@ -410,6 +395,25 @@ lexer_next (struct lexer *self, char **e) {
 		buffer_append_c (&self->string, lexer_advance (self));
 	while (lexer_is_word_char (*self->p));
 	return T_STRING;
+}
+
+static char *lexer_errorf (struct lexer *self, const char *fmt, ...)
+	ATTRIBUTE_PRINTF (2, 3);
+
+static char *
+lexer_errorf (struct lexer *self, const char *fmt, ...) {
+	va_list ap;
+	va_start (ap, fmt);
+	char *description = vformat (fmt, ap);
+	va_end (ap);
+
+	if (!description)
+		return NULL;
+
+	char *e = format ("near line %u, column %u: %s",
+		self->line + 1, self->column + 1, description);
+	free (description);
+	return e;
 }
 
 // --- Parsing -----------------------------------------------------------------
@@ -479,9 +483,14 @@ parser_free (struct parser *self) {
 static enum token
 parser_peek (struct parser *self, jmp_buf out) {
 	if (self->replace_token) {
-		self->token = lexer_next (&self->lexer, &self->error);
-		if (self->error)
+		const char *e = NULL;
+		self->token = lexer_next (&self->lexer, &e);
+		if (e) {
+			// TODO: check memory error
+			self->error = lexer_errorf (&self->lexer, "%s", e);
 			longjmp (out, 1);
+		}
+		// TODO: with T_STRING check for memory error within
 		self->replace_token = false;
 	}
 	return self->token;
@@ -497,7 +506,8 @@ parser_expect (struct parser *self, enum token token, jmp_buf out) {
 	if (parser_accept (self, token, out))
 		return;
 
-	lexer_error (&self->lexer, &self->error, "unexpected `%s', expected `%s'",
+	// TODO: check memory error
+	self->error = lexer_errorf (&self->lexer, "unexpected `%s', expected `%s'",
 		token_name (self->token),
 		token_name (token));
 	longjmp (out, 1);
@@ -564,7 +574,8 @@ parse_item (struct parser *self, jmp_buf out) {
 		return parse_prefix_list (new_list (result), "quote");
 	}
 
-	lexer_error (&self->lexer, &self->error,
+	// TODO: check memory error
+	self->error = lexer_errorf (&self->lexer,
 		"unexpected `%s', expected a value", token_name (self->token));
 	longjmp (out, 1);
 }
