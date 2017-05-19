@@ -412,8 +412,6 @@ lexer_errorf (struct lexer *self, const char *fmt, ...) {
 
 // --- Parsing -----------------------------------------------------------------
 
-// FIXME: the parser generally ignores memory allocation errors
-
 static void
 print_string (const char *s) {
 	putc ('\'', stdout);
@@ -523,8 +521,10 @@ static struct item * parse_line (struct parser *self, jmp_buf out);
 
 static struct item *
 parse_prefix_list (struct item *list, const char *name) {
+	// TODO: check memory error
 	struct item *prefix = new_string (name, strlen (name));
 	prefix->next = list;
+	// TODO: check memory error
 	return new_list (prefix);
 }
 
@@ -540,6 +540,7 @@ parse_item (struct parser *self, jmp_buf out) {
 
 	SKIP_NL ();
 	if (ACCEPT (T_STRING))
+		// TODO: check memory error, also in "self->lexer.string"
 		return new_string (self->lexer.string.s, self->lexer.string.len);
 	if (ACCEPT (T_AT)) {
 		result = parse_item (self, out);
@@ -551,6 +552,7 @@ parse_item (struct parser *self, jmp_buf out) {
 			tail = &(*tail)->next;
 			SKIP_NL ();
 		}
+		// TODO: check memory error
 		return new_list (result);
 	}
 	if (ACCEPT (T_LBRACKET)) {
@@ -565,6 +567,7 @@ parse_item (struct parser *self, jmp_buf out) {
 		while ((*tail = parse_line (self, err)))
 			tail = &(*tail)->next;
 		EXPECT (T_RBRACE);
+		// TODO: check memory error
 		return parse_prefix_list (new_list (result), "quote");
 	}
 
@@ -585,15 +588,16 @@ parse_line (struct parser *self, jmp_buf out) {
 	}
 
 	while (PEEK () != T_RBRACE && PEEK () != T_ABORT) {
-		if (ACCEPT (T_NEWLINE)) {
-			if (result)
-				return new_list (result);
-		} else {
+		if (!ACCEPT (T_NEWLINE)) {
 			*tail = parse_item (self, err);
 			tail = &(*tail)->next;
+		} else if (result) {
+			// TODO: check memory error
+			return new_list (result);
 		}
 	}
 	if (result)
+		// TODO: check memory error
 		return new_list (result);
 	return NULL;
 }
