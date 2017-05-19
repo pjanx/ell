@@ -630,7 +630,7 @@ parse (const char *s, size_t len, char **e) {
 	print_tree (result, 0);
 	printf ("\n\n");
 #endif
-	return new_list (result);
+	return result;
 }
 
 // --- Runtime -----------------------------------------------------------------
@@ -1006,7 +1006,7 @@ main (int argc, char *argv[]) {
 	fclose (fp);
 
 	char *e = NULL;
-	struct item *tree = parse (buf.s, buf.len, &e);
+	struct item *program = parse (buf.s, buf.len, &e);
 	free (buf.s);
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
@@ -1021,9 +1021,9 @@ main (int argc, char *argv[]) {
 		printf ("%s\n", "runtime library initialization failed");
 
 	struct item *result = NULL;
-	(void) execute (&ctx, tree->head, &result);
+	(void) execute (&ctx, program, &result);
 	item_free_list (result);
-	item_free_list (tree);
+	item_free_list (program);
 
 	const char *failure = NULL;
 	if (ctx.memory_failure)
