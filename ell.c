@@ -160,8 +160,8 @@ new_clone (const struct item *item) {
 		return NULL;
 
 	memcpy (clone, item, size);
-	if (item->type == ITEM_LIST) {
-		if (clone->head && !(clone->head = new_clone_list (clone->head))) {
+	if (item->type == ITEM_LIST && clone->head) {
+		if (!(clone->head = new_clone_list (clone->head))) {
 			free (clone);
 			return NULL;
 		}
@@ -475,8 +475,7 @@ parser_peek (struct parser *self, jmp_buf out) {
 				!(self->error = lexer_errorf (&self->lexer, "%s", e));
 			longjmp (out, 1);
 		}
-		if (self->token == T_STRING
-		 && (self->memory_failure = self->lexer.string.memory_failure))
+		if (self->token == T_STRING && self->lexer.string.memory_failure)
 			longjmp (out, 1);
 		self->replace_token = false;
 	}
@@ -615,11 +614,9 @@ parser_run (struct parser *self, const char **e) {
 	struct item *volatile result = NULL, *volatile *tail = &result;
 	if (setjmp (err)) {
 		item_free_list (result);
-		if (e) {
-			*e = self->error;
-			if (self->memory_failure)
-				*e = "memory allocation failure";
-		}
+		*e = self->error;
+		if (self->memory_failure || self->lexer.string.memory_failure)
+			*e = "memory allocation failure";
 		return NULL;
 	}
 
@@ -667,9 +664,6 @@ native_register (const char *name, handler_fn handler) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-// TODO: fill in "error_is_fatal"
-// TODO: probably add new_*() methods that set "memory_failure"
-
 struct context {
 	struct item *variables;             ///< List of variables
 
@@ -691,6 +685,11 @@ context_free (struct context *ctx) {
 	free (ctx->error);
 }
 
+static bool
+check (struct context *ctx, struct item *item) {
+	return !(ctx->memory_failure |= !item);
+}
+
 static struct item *
 get (struct context *ctx, const char *name) {
 	for (struct item *iter = ctx->variables; iter; iter = iter->next)
@@ -701,49 +700,36 @@ get (struct context *ctx, const char *name) {
 
 static bool
 set (struct context *ctx, const char *name, struct item *value) {
-	struct item *iter, *key = NULL, *pair = NULL;
+	struct item *iter, *key, *pair;
 	for (iter = ctx->variables; iter; iter = iter->next)
 		if (!strcmp (iter->head->value, name))
 			break;
 	if (iter) {
 		item_free (iter->head->next);
-		if (!(iter->head->next = new_clone (value))) {
-			ctx->memory_failure = true;
-			return false;
-		}
-		return true;
+		return check (ctx, (iter->head->next = new_clone (value)));
 	}
-	if ((key = new_string (name, strlen (name)))
-	 && (pair = new_list (NULL))) {
-		if (!((pair->head = key)->next = new_clone (value))) {
-			item_free (pair);
-			ctx->memory_failure = true;
-			return false;
-		}
-		pair->next = ctx->variables;
-		ctx->variables = pair;
-		return true;
-	} else {
-		item_free_list (key);
-		item_free_list (pair);
-		ctx->memory_failure = true;
+	if (!check (ctx, (key = new_string (name, strlen (name))))
+	 || !check (ctx, (pair = new_list (key))))
+		return false;
+	if (!check (ctx, (key->next = new_clone (value)))) {
+		item_free (pair);
 		return false;
 	}
+	pair->next = ctx->variables;
+	ctx->variables = pair;
+	return true;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
 set_error (struct context *ctx, const char *format, ...) {
-	free (ctx->error);
-
 	va_list ap;
 	va_start (ap, format);
-	ctx->error = vformat (format, ap);
-	va_end (ap);
-
-	if (!ctx->error)
+	free (ctx->error);
+	if (!(ctx->error = vformat (format, ap)))
 		ctx->memory_failure = true;
+	va_end (ap);
 	return false;
 }
 
@@ -760,7 +746,7 @@ rename_arguments (struct context *ctx, struct item *names) {
 			return true;
 
 		if (names->type != ITEM_STRING)
-			continue;
+			return set_error (ctx, "argument names must be strings");
 		if (!set (ctx, names->value, value))
 			return false;
 	}
@@ -771,44 +757,33 @@ static bool execute_statement (struct context *, struct item *, struct item **);
 static bool execute (struct context *ctx, struct item *body, struct item **);
 
 static bool
-execute_args_list (struct context *ctx, struct item *args, struct item **res) {
-	for (struct item *arg = args; arg; arg = arg->next) {
+execute_args (struct context *ctx, struct item *args, struct item **res) {
+	for (; args; args = args->next) {
 		struct item *evaluated = NULL;
-		if (!execute_statement (ctx, arg, &evaluated))
+		if (!execute_statement (ctx, args, &evaluated))
 			return false;
 		if (evaluated) {
 			item_free_list (evaluated->next);
 			evaluated->next = NULL;
-			*res = evaluated;
-			res = &evaluated->next;
+			res = &(*res = evaluated)->next;
 		}
 	}
 	return true;
 }
 
-static bool
-execute_native (struct context *ctx,
-	struct native_fn *fn, struct item *next, struct item **res) {
-	struct item *args = NULL;
-	bool ok = execute_args_list (ctx, next, &args)
-		&& fn->handler (ctx, args, res);
-	item_free_list (args);
-	return ok;
-}
-
 // TODO: we should probably maintain arguments in a separate list,
 //   either that or at least remember the count so that we can reset them
 static bool
-execute_args (struct context *ctx, struct item *next) {
+execute_args_and_set (struct context *ctx, struct item *following) {
 	struct item *args = NULL;
-	if (!execute_args_list (ctx, next, &args)) {
+	if (!execute_args (ctx, following, &args)) {
 		item_free_list (args);
 		return false;
 	}
 
-	char buf[64];
 	size_t i = 0;
 	for (struct item *arg = args; arg; arg = arg->next) {
+		char buf[64];
 		(void) snprintf (buf, sizeof buf, "%zu", i++);
 		if (!set (ctx, buf, arg))
 			return false;
@@ -818,14 +793,20 @@ execute_args (struct context *ctx, struct item *next) {
 }
 
 static bool
+execute_native (struct context *ctx,
+	struct native_fn *fn, struct item *next, struct item **res) {
+	struct item *args = NULL;
+	bool ok = execute_args (ctx, next, &args)
+		&& fn->handler (ctx, args, res);
+	item_free_list (args);
+	return ok;
+}
+
+static bool
 execute_statement
 	(struct context *ctx, struct item *statement, struct item **result) {
-	if (statement->type == ITEM_STRING) {
-		if ((*result = new_clone (statement)))
-			return true;
-		ctx->memory_failure = true;
-		return false;
-	}
+	if (statement->type == ITEM_STRING)
+		return check (ctx, (*result = new_clone (statement)));
 
 	// XXX: should this ever happen and what are the consequences?
 	//   Shouldn't we rather clone the empty list?
@@ -838,12 +819,10 @@ execute_statement
 	if (body->type == ITEM_STRING) {
 		name = body->value;
 		// TODO: these could be just regular handlers, only top priority
-		if (!strcmp (name, "quote")) {
-			if (!following || (*result = new_clone_list (following)))
-				return true;
-			ctx->memory_failure = true;
-			return false;
-		}
+		// TODO: these should also get a stack trace the normal way
+		if (!strcmp (name, "quote"))
+			return !following
+				|| check (ctx, (*result = new_clone_list (following)));
 		if (!strcmp (name, "arg"))
 			return rename_arguments (ctx, following);
 		body = get (ctx, name);
@@ -857,23 +836,21 @@ execute_statement
 			return true;
 	} else if (body->type == ITEM_STRING) {
 		// Recursion could be pretty fatal, let's not do that
-		if ((*result = new_clone (body)))
+		if (check (ctx, (*result = new_clone (body))))
 			return true;
-		ctx->memory_failure = true;
 	} else {
-		if (execute_args (ctx, following)
+		if (execute_args_and_set (ctx, following)
 		 && execute (ctx, body->head, result))
 			return true;
 	}
 
-	// In this case, `error' is NULL
-	if (ctx->memory_failure)
-		return false;
-
-	// This creates some form of a stack trace
-	char *tmp = ctx->error;
-	set_error (ctx, "%s -> %s", name, tmp);
-	free (tmp);
+	// In that case, `error' is NULL and there's nothing else to do anyway
+	if (!ctx->memory_failure) {
+		// This creates some form of a stack trace
+		char *tmp = ctx->error;
+		set_error (ctx, "%s -> %s", name, tmp);
+		free (tmp);
+	}
 	return false;
 }
 
@@ -925,56 +902,59 @@ init_runtime_library_scripts (struct context *ctx) {
 defn (fn_set) {
 	struct item *name = args;
 	if (!name || name->type != ITEM_STRING)
-		return (void *) set_error (ctx, "first argument must be string");
+		return set_error (ctx, "first argument must be string");
 
 	struct item *value;
 	if ((value = name->next))
 		return set (ctx, name->value, value);
 
 	// FIXME: how do we represent a nil value here?
-	*result = new_clone (get (ctx, name->value));
-	return true;
+	return check (ctx, (*result = new_clone (get (ctx, name->value))));
+}
+
+defn (fn_list) {
+	struct item *values = NULL;
+	if (args && !check (ctx, (values = new_clone_list (args))))
+		return false;
+	return check (ctx, (*result = new_list (values)));
 }
 
 defn (fn_print) {
 	(void) result;
-
-	// TODO: error on list
-	struct buffer buf = BUFFER_INITIALIZER;
-	for (; args; args = args->next)
-		buffer_append (&buf, args->value, args->len);
-	buffer_append_c (&buf, '\0');
-	if (buf.memory_failure) {
-		ctx->memory_failure = true;
-		return false;
+	for (; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			// TODO: print lists as their parsable representation
+			return set_error (ctx, "cannot print lists");
+		if (fwrite (args->value, 1, args->len, stdout) != args->len)
+			return set_error (ctx, "write failed: %s", strerror (errno));
 	}
-
-	printf ("%s", buf.s);
-	free (buf.s);
 	return true;
 }
 
 defn (fn_concatenate) {
-	// TODO: error on list
 	struct buffer buf = BUFFER_INITIALIZER;
-	for (; args; args = args->next)
+	for (; args; args = args->next) {
+		if (args->type != ITEM_STRING) {
+			free (buf.s);
+			return set_error (ctx, "cannot concatenate lists");
+		}
 		buffer_append (&buf, args->value, args->len);
-	buffer_append_c (&buf, '\0');
-	if (buf.memory_failure) {
-		ctx->memory_failure = true;
-		return false;
 	}
-	*result = new_string (buf.s, buf.len);
+	buffer_append_c (&buf, '\0');
+
+	bool ok = !(ctx->memory_failure = buf.memory_failure)
+		&& check (ctx, (*result = new_string (buf.s, buf.len)));
 	free (buf.s);
-	return true;
+	return ok;
 }
 
 static bool
 init_runtime_library (void)
 {
-	return native_register ("..",     fn_concatenate)
-		&& native_register ("set",    fn_set)
-		&& native_register ("print",  fn_print);
+	return native_register ("set",    fn_set)
+		&& native_register ("list",   fn_list)
+		&& native_register ("print",  fn_print)
+		&& native_register ("..",     fn_concatenate);
 }
 
 static void
@@ -1008,7 +988,6 @@ main (int argc, char *argv[]) {
 	const char *e = NULL;
 	struct item *program = parser_run (&parser, &e);
 	free (buf.s);
-
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
 		return 1;
