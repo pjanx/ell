@@ -17,8 +17,6 @@
  *
  */
 
-#define _XOPEN_SOURCE 500
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +26,6 @@
 #include <assert.h>
 #include <time.h>
 #include <stdbool.h>
-#include <strings.h>
 #include <math.h>
 #include <setjmp.h>
 
@@ -53,12 +50,12 @@ vformat (const char *format, va_list ap) {
 	if (size < 0)
 		return NULL;
 
-	char buf[size + 1];
-	size = vsnprintf (buf, sizeof buf, format, ap);
-	if (size < 0)
+	char *buf = malloc (size + 1);
+	if (buf && vsnprintf (buf, size + 1, format, ap) < 0) {
+		free (buf);
 		return NULL;
-
-	return strdup (buf);
+	}
+	return buf;
 }
 
 static char *
@@ -184,10 +181,7 @@ new_clone_list (const struct item *item) {
 }
 
 static struct item *
-new_string (const char *s, ssize_t len) {
-	if (len < 0)
-		len = strlen (s);
-
+new_string (const char *s, size_t len) {
 	struct item *item = calloc (1, sizeof *item + len + 1);
 	if (!item)
 		return NULL;
