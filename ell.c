@@ -247,7 +247,7 @@ lexer_free (struct lexer *self) {
 
 static bool lexer_is_ignored (int c) { return strchr (" \t", c); }
 static bool lexer_is_word_char (int c) {
-	return !lexer_is_ignored (c) && !strchr ("()[]{}\n@#'", c);
+	return !lexer_is_ignored (c) && !strchr ("()[]{}\n;@#'", c);
 }
 
 static int
@@ -354,6 +354,7 @@ lexer_next (struct lexer *self, const char **e) {
 	case '{':   lexer_advance (self);  return T_LBRACE;
 	case '}':   lexer_advance (self);  return T_RBRACE;
 	case '\n':  lexer_advance (self);  return T_NEWLINE;
+	case ';':   lexer_advance (self);  return T_NEWLINE;
 	case '@':   lexer_advance (self);  return T_AT;
 
 	case '#':
@@ -1065,9 +1066,8 @@ init_runtime_library (struct context *ctx) {
 		const char *definition;         ///< The defining script
 	} functions[] = {
 		// TODO: try to think of something useful
-		// XXX: should we add a ';' token to substitute newlines?
 		// FIXME: this "unless" is probably not going to work
-		{ "unless", "arg cond body\nif (not (eval @cond)) @body" },
+		{ "unless", "arg cond body; if (not (eval @cond)) @body" },
 	};
 
 	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
