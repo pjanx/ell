@@ -10,6 +10,8 @@ reasonably comfortable to use.
 This package is an implementation of said language, meant to be self-contained,
 portable and reusable.  Performance is specifically not an intent.
 
+The project is currently in a "working proof of concept" stage.
+
 Syntax
 ------
 Owing to its Scheme heritage, 'ell' is homoiconic, that is a program can be
@@ -70,17 +72,37 @@ from the outer scope.
 
 Standard library
 ----------------
-`if <cond> <body> [elif <cond> <body>]... [else <body>]`
+`set <name> [<value>]`
 
-Conditional evaluation, strings evaluate to themselves.
-
-`funargs`
-
-Returns arguments to the current evaluation context as a list.
+Retrieves or sets a named variable.
 
 `list`
 
 Returns a list of parameters.  The syntax sugar for lists is `[]`.
+
+`if <cond> <body> [elif <cond> <body>]... [else <body>]`
+
+Conditional evaluation, strings evaluate to themselves.
+
+`for <list> <body>`
+
+Run the body for each element.
+
+`map <list> <body>`
+
+Transform each element with the given function.
+
+`filter <list> <body>`
+
+Return a new list consisting of matching elements only.
+
+`.. [<string>]...`
+
+Concatenates strings.
+
+`print [<item>]...`
+
+Prints all items in sequence--strings directly, lists as source code.
 
 Contributing and Support
 ------------------------

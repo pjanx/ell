@@ -26,7 +26,6 @@
 #include <assert.h>
 #include <time.h>
 #include <stdbool.h>
-#include <math.h>
 #include <setjmp.h>
 
 #if defined __GNUC__
@@ -768,7 +767,7 @@ execute_args (struct context *ctx, struct item *args, struct item **res) {
 // TODO: we should probably maintain arguments in a separate list,
 //   either that or at least remember the count so that we can reset them
 static bool
-execute_args_and_set (struct context *ctx, struct item *following) {
+execute_and_set_args (struct context *ctx, struct item *following) {
 	struct item *args = NULL;
 	if (!execute_args (ctx, following, &args)) {
 		item_free_list (args);
@@ -833,7 +832,8 @@ execute_statement
 		if (check (ctx, (*result = new_clone (body))))
 			return true;
 	} else {
-		if (execute_args_and_set (ctx, following)
+		// FIXME: this creates a confusing backtrace for argument evaluation
+		if (execute_and_set_args (ctx, following)
 		 && execute (ctx, body->head, result))
 			return true;
 	}
@@ -866,31 +866,9 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 	(struct context *ctx, struct item *args, struct item **result)
 
 static bool
-init_runtime_library_scripts (struct context *ctx) {
-	bool ok = true;
-
-	struct {
-		const char *name;               ///< Name of the function
-		const char *definition;         ///< The defining script
-	} functions[] = {
-		// TODO: try to think of something useful
-	};
-
-	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
-		struct parser parser;
-		parser_init (&parser,
-			functions[i].definition, strlen (functions[i].definition));
-		const char *e = NULL;
-		struct item *body = parser_run (&parser, &e);
-		if (e) {
-			printf ("error parsing internal function `%s': %s\n",
-				functions[i].name, e);
-			ok = false;
-		} else
-			ok &= set (ctx, functions[i].name, body);
-		parser_free (&parser);
-	}
-	return ok;
+truthy (struct item *item) {
+	return item
+		&& ((item->type == ITEM_STRING && item->len != 0) || item->head);
 }
 
 defn (fn_set) {
@@ -913,6 +891,114 @@ defn (fn_list) {
 	if (args && !check (ctx, (values = new_clone_list (args))))
 		return false;
 	return check (ctx, (*result = new_list (values)));
+}
+
+defn (fn_if) {
+	struct item *cond, *body, *keyword;
+	for (cond = args; ; cond = keyword->next) {
+		if (!cond)
+			return set_error (ctx, "missing condition");
+		if (!(body = cond->next))
+			return set_error (ctx, "missing body");
+
+		struct item *res = NULL;
+		if (!execute_statement (ctx, cond, &res))
+			return false;
+		bool match = truthy (res);
+		item_free_list (res);
+		if (match)
+			return execute_statement (ctx, body, result);
+
+		if (!(keyword = body->next))
+			break;
+		if (keyword->type != ITEM_STRING)
+			return set_error (ctx, "expected keyword, got list");
+
+		if (!strcmp (keyword->value, "else")) {
+			if (!(body = keyword->next))
+				return set_error (ctx, "missing body");
+			return execute_statement (ctx, body, result);
+		}
+		if (strcmp (keyword->value, "elif"))
+			return set_error (ctx, "invalid keyword: %s", keyword->value);
+	}
+	return true;
+}
+
+// TODO: how to break out of the loop?  Catchable error?  Special value?
+defn (fn_for) {
+	struct item *list = args, *body;
+	if (!list || list->type != ITEM_LIST)
+		return set_error (ctx, "first argument must be a list");
+	if (!(body = list->next) || body->type != ITEM_LIST)
+		return set_error (ctx, "second argument must be a function");
+
+	(void) result;
+	for (struct item *iter = list->head; iter; iter = iter->next) {
+		struct item *copy;
+		if (!check (ctx, (copy = new_clone (iter))))
+			return false;
+
+		struct item *res = NULL;
+		// FIXME: wrong thing is executed, see fn_map
+		bool ok = execute_statement (ctx, body, &res);
+		item_free_list (res);
+		if (!ok)
+			return false;
+	}
+	return true;
+}
+
+defn (fn_map) {
+	struct item *body = args, *values;
+	if (!body || body->type != ITEM_LIST)
+		return set_error (ctx, "first argument must be a function");
+	if (!(values = body->next) || values->type != ITEM_LIST)
+		return set_error (ctx, "second argument must be a list");
+
+	struct item *res = NULL, **out = &res;
+	for (struct item *v = values->head; v; v = v->next) {
+		// FIXME: wrong thing is executed
+		//   -> either temporarily append the value to the body
+		//   -> or modify execute_statement()
+		if (!execute_statement (ctx, v, out)) {
+			item_free_list (res);
+			return false;
+		}
+		while (*out && (*out)->next)
+			out = &(*out)->next;
+	}
+	return check (ctx, (*result = new_list (res)));
+}
+
+defn (fn_filter) {
+	struct item *body = args, *values;
+	if (!body || body->type != ITEM_LIST)
+		return set_error (ctx, "first argument must be a function");
+	if (!(values = body->next) || values->type != ITEM_LIST)
+		return set_error (ctx, "second argument must be a list");
+
+	struct item *res = NULL, **out = &res;
+	for (struct item *v = values->head; v; v = v->next) {
+		struct item *res = NULL;
+		// FIXME: wrong thing is executed, see fn_map
+		if (!execute_statement (ctx, body, &res)) {
+			item_free_list (res);
+			return false;
+		}
+		bool match = truthy (res);
+		item_free_list (res);
+		if (!match)
+			continue;
+
+		struct item *copy;
+		if (!check (ctx, (copy = new_clone (v)))) {
+			item_free_list (res);
+			return false;
+		}
+		out = &(*out = copy)->next;
+	}
+	return check (ctx, (*result = new_list (res)));
 }
 
 defn (fn_print) {
@@ -944,22 +1030,62 @@ defn (fn_concatenate) {
 	return ok;
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 static bool
-init_runtime_library (void)
+init_native_library (void)
 {
 	return native_register ("set",    fn_set)
 		&& native_register ("list",   fn_list)
+		&& native_register ("if",     fn_if)
+		&& native_register ("for",    fn_for)
+		&& native_register ("map",    fn_map)
+		&& native_register ("filter", fn_filter)
 		&& native_register ("print",  fn_print)
 		&& native_register ("..",     fn_concatenate);
 }
 
 static void
-free_runtime_library (void) {
+free_native_library (void) {
 	struct native_fn *next, *iter;
 	for (iter = g_native; iter; iter = next) {
 		next = iter->next;
 		free (iter);
 	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static bool
+init_runtime_library (struct context *ctx) {
+	bool ok = true;
+
+	struct {
+		const char *name;               ///< Name of the function
+		const char *definition;         ///< The defining script
+	} functions[] = {
+		// TODO: try to think of something useful
+		// XXX: should we add a ';' token to substitute newlines?
+		// FIXME: this "unless" is probably not going to work
+		{ "unless", "arg cond body\nif (not (eval @cond)) @body" },
+	};
+
+	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
+		struct parser parser;
+		parser_init (&parser,
+			functions[i].definition, strlen (functions[i].definition));
+		const char *e = NULL;
+		struct item *body = parser_run (&parser, &e);
+		if (e) {
+			printf ("error parsing internal function `%s': %s\n",
+				functions[i].name, e);
+			ok = false;
+		} else
+			ok &= set (ctx, functions[i].name, body);
+		item_free_list (body);
+		parser_free (&parser);
+	}
+	return ok;
 }
 
 // --- Main --------------------------------------------------------------------
@@ -998,8 +1124,8 @@ main (int argc, char *argv[]) {
 
 	struct context ctx;
 	context_init (&ctx);
-	if (!init_runtime_library ()
-	 || !init_runtime_library_scripts (&ctx))
+	if (!init_native_library ()
+	 || !init_runtime_library (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
 
 	struct item *result = NULL;
@@ -1014,7 +1140,7 @@ main (int argc, char *argv[]) {
 		printf ("%s: %s\n", "runtime error", failure);
 	context_free (&ctx);
 
-	free_runtime_library ();
+	free_native_library ();
 	return 0;
 }
 
