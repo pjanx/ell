@@ -765,6 +765,13 @@ execute_args (struct context *ctx, struct item *args, struct item **res) {
 	return true;
 }
 
+static bool
+set_arg (struct context *ctx, size_t arg, struct item *value) {
+	char buf[64];
+	(void) snprintf (buf, sizeof buf, "%zu", arg);
+	return set (ctx, buf, value);
+}
+
 // TODO: we should probably maintain arguments in a separate list,
 //   either that or at least remember the count so that we can reset them
 static bool
@@ -776,12 +783,9 @@ execute_and_set_args (struct context *ctx, struct item *following) {
 	}
 
 	size_t i = 0;
-	for (struct item *arg = args; arg; arg = arg->next) {
-		char buf[64];
-		(void) snprintf (buf, sizeof buf, "%zu", i++);
-		if (!set (ctx, buf, arg))
+	for (struct item *arg = args; arg; arg = arg->next)
+		if (!set_arg (ctx, i++, arg))
 			return false;
-	}
 	item_free_list (args);
 	return true;
 }
@@ -821,6 +825,15 @@ execute_statement
 			return rename_arguments (ctx, following);
 		body = get (ctx, name);
 	}
+
+	// XXX: not sure whether it makes more sense to evaluate a list
+	//   instead of leaving it as it is -> probably evaluate, since then
+	//   lambdas will be better: { arg _n; print @_n } 'hello\n'
+	//
+	//   Even though it's practically useless being able to dereference
+	//   function names directly that way: `@list 1 2 3` vs `list 1 2 3`
+	//
+	//   Maybe something like (choose [@f1 @f2 @f3]) arg1 arg2 arg3
 
 	if (!body) {
 		struct native_fn *fn = native_find (name);
@@ -935,14 +948,10 @@ defn (fn_for) {
 		return set_error (ctx, "second argument must be a function");
 
 	(void) result;
-	for (struct item *iter = list->head; iter; iter = iter->next) {
-		struct item *copy;
-		if (!check (ctx, (copy = new_clone (iter))))
-			return false;
-
+	for (struct item *v = list->head; v; v = v->next) {
 		struct item *res = NULL;
-		// FIXME: wrong thing is executed, see fn_map
-		bool ok = execute_statement (ctx, body, &res);
+		bool ok = set_arg (ctx, 0, v)
+			&& execute (ctx, body->head, &res);
 		item_free_list (res);
 		if (!ok)
 			return false;
@@ -959,14 +968,12 @@ defn (fn_map) {
 
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
-		// FIXME: wrong thing is executed
-		//   -> either temporarily append the value to the body
-		//   -> or modify execute_statement()
-		if (!execute_statement (ctx, v, out)) {
+		if (!set_arg (ctx, 0, v)
+		 || !execute (ctx, body->head, out)) {
 			item_free_list (res);
 			return false;
 		}
-		while (*out && (*out)->next)
+		while (*out)
 			out = &(*out)->next;
 	}
 	return check (ctx, (*result = new_list (res)));
@@ -981,14 +988,14 @@ defn (fn_filter) {
 
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
-		struct item *res = NULL;
-		// FIXME: wrong thing is executed, see fn_map
-		if (!execute_statement (ctx, body, &res)) {
+		struct item *keep = NULL;
+		if (!set_arg (ctx, 0, v)
+		 || !execute (ctx, body->head, &keep)) {
 			item_free_list (res);
 			return false;
 		}
-		bool match = truthy (res);
-		item_free_list (res);
+		bool match = truthy (keep);
+		item_free_list (keep);
 		if (!match)
 			continue;
 

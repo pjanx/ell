@@ -2,5 +2,10 @@ set greet {
 	arg _name
 	print 'hello ' @_name '\n'
 }
-greet world
-greet creator
+for (map { arg _x; .. @_x ! } [
+	world
+	creator
+]) {
+	arg _whom
+	greet @_whom
+}
