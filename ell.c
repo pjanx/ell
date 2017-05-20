@@ -908,8 +908,10 @@ defn (fn_set) {
 	if ((value = name->next))
 		return set (ctx, name->value, value);
 
-	// FIXME: how do we represent a nil value here?
-	return check (ctx, (*result = new_clone (get (ctx, name->value))));
+	// We return an empty list for a nil value
+	if (!(value = get (ctx, name->value)))
+		return check (ctx, (*result = new_list (NULL)));
+	return check (ctx, (*result = new_clone (value)));
 }
 
 defn (fn_list) {
