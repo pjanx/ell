@@ -1024,8 +1024,8 @@ defn (fn_concatenate) {
 	}
 	buffer_append_c (&buf, '\0');
 
-	bool ok = !(ctx->memory_failure = buf.memory_failure)
-		&& check (ctx, (*result = new_string (buf.s, buf.len)));
+	bool ok = !(ctx->memory_failure |= buf.memory_failure)
+		&& check (ctx, (*result = new_string (buf.s, buf.len - 1)));
 	free (buf.s);
 	return ok;
 }
