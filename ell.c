@@ -778,6 +778,7 @@ set_arg (struct context *ctx, size_t arg, struct item *value) {
 
 // TODO: we should probably maintain arguments in a separate list,
 //   either that or at least remember the count so that we can reset them
+// NOTE: it even seems that storing arguments as numbers is completely useless
 static bool
 execute_and_set_args (struct context *ctx, struct item *following) {
 	struct item *args = NULL;
