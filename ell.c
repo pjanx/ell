@@ -1145,6 +1145,7 @@ defn (fn_not) {
 	return check (ctx, (*result = new_boolean (!truthy (args))));
 }
 
+// TODO: "and" and "or" should be short-circuiting special forms
 defn (fn_and) {
 	bool res = true;
 	for (; args; args = args->next)
@@ -1196,9 +1197,13 @@ init_runtime_library (struct context *ctx) {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} functions[] = {
-		// TODO: try to think of something useful
 		// FIXME: this "unless" is probably not going to work
-		{ "unless", "arg cond body; if (not (eval @cond)) @body" },
+		{ "unless", "arg _cond _body; if (not (eval @_cond)) @_body" },
+		// TODO: we should be able to apply them to all arguments
+		{ "ne?",    "arg _ne1 _ne2; not (eq? @_ne1 @_ne2))"          },
+		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2))"          },
+		{ "le?",    "arg _le1 _le2; ge? @_le2 @_le1"                 },
+		{ "gt?",    "arg _gt1 _gt2; lt? @_gt2 @_gt1"                 },
 	};
 
 	bool ok = true;
