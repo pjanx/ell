@@ -48,10 +48,9 @@ Observe that the whole program is enclosed in an implicit pair of `{}` and that
 Runtime
 -------
 All variables are put in a single global namespace with no further scoping.
-When calling a command (which is a list of lists), all arguments are
-automatically stored in variables named 0, 1, 2, 3, ... n.  They are however
-effectively inaccessible and you must rename them first using the `arg` special
-form.
+Arguments to a block (which is a list of lists) must be assigned to variables
+first using the `arg` special form, and that must happen before they get
+overriden by execution of a different block.
 
 When evaluating a command, the first argument is typically a string with its
 name and it is resolved as if `set` was called on it.

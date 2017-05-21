@@ -625,6 +625,7 @@ parser_run (struct parser *self, const char **e) {
 struct context {
 	struct item *variables;             ///< List of variables
 	struct native_fn *native;           ///< Maps strings to C functions
+	struct item *arguments;             ///< Arguments to last executed block
 
 	char *error;                        ///< Error information
 	bool error_is_fatal;                ///< Whether the error can be catched
@@ -654,6 +655,7 @@ context_free (struct context *ctx) {
 		free (iter);
 	}
 	item_free_list (ctx->variables);
+	item_free_list (ctx->arguments);
 	free (ctx->error);
 }
 
@@ -733,19 +735,19 @@ set_error (struct context *ctx, const char *format, ...) {
 }
 
 static bool
-rename_arguments (struct context *ctx, struct item *names) {
-	size_t i = 0;
+assign_arguments (struct context *ctx, struct item *names) {
+	struct item *arg = ctx->arguments;
 	for (; names; names = names->next) {
 		if (names->type != ITEM_STRING)
 			return set_error (ctx, "argument names must be strings");
 
-		char buf[64];
-		(void) snprintf (buf, sizeof buf, "%zu", i++);
-		struct item *value = get (ctx, buf);
-		if (value && !check (ctx, (value = new_clone (value))))
+		struct item *value = NULL;
+		if (arg && !check (ctx, (value = new_clone (arg))))
 			return false;
 		if (!set (ctx, names->value, value))
 			return false;
+		if (arg)
+			arg = arg->next;
 	}
 	return true;
 }
@@ -768,14 +770,6 @@ execute_args (struct context *ctx, struct item *args, struct item **res) {
 		res = &(*res = evaluated)->next;
 	}
 	return true;
-}
-
-static bool
-set_arg (struct context *ctx, size_t arg, struct item *value) {
-	char buf[64];
-	(void) snprintf (buf, sizeof buf, "%zu", arg);
-	return check (ctx, (value = new_clone (value)))
-		&& set (ctx, buf, value);
 }
 
 static bool
@@ -805,16 +799,8 @@ execute_resolved (struct context *ctx, struct item *body, struct item *args,
 		return false;
 	}
 
-	// TODO: we should probably maintain arguments in a separate list,
-	//   either that or at least remember the count so that we can reset them
-	// NOTE: it even seems that storing them as numbers is completely useless
-	size_t i = 0;
-	for (struct item *arg = evaluated; arg; arg = arg->next)
-		if (!set_arg (ctx, i++, arg)) {
-			item_free_list (evaluated);
-			return false;
-		}
-	item_free_list (evaluated);
+	item_free_list (ctx->arguments);
+	ctx->arguments = evaluated;
 	return execute (ctx, body->head, result);
 }
 
@@ -827,7 +813,7 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 		if (!strcmp (name, "quote"))
 			return !args || check (ctx, (*result = new_clone_list (args)));
 		if (!strcmp (name, "arg"))
-			return rename_arguments (ctx, args);
+			return assign_arguments (ctx, args);
 		if ((body = get (ctx, name)))
 			return execute_resolved (ctx, body, args, result);
 		return execute_native (ctx, name, args, result);
@@ -897,6 +883,28 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 #define defn(name) static bool name \
 	(struct context *ctx, struct item *args, struct item **result)
 
+static bool
+set_single_argument (struct context *ctx, struct item *item) {
+	struct item *single;
+	if (!check (ctx, (single = new_clone (item))))
+		return false;
+	item_free_list (ctx->arguments);
+	ctx->arguments = single;
+	return true;
+}
+
+#define E_BREAK "_break"
+
+static bool
+eat_error (struct context *ctx, const char *name) {
+	if (!ctx->error || strcmp (ctx->error, name))
+		return false;
+
+	free (ctx->error);
+	ctx->error = NULL;
+	return true;
+}
+
 static struct item *
 new_number (double n) {
 	char *s;
@@ -912,18 +920,6 @@ new_number (double n) {
 	struct item *item = new_string (s, strlen (s));
 	free (s);
 	return item;
-}
-
-#define E_BREAK "_break"
-
-static bool
-eat_error (struct context *ctx, const char *name) {
-	if (!ctx->error || strcmp (ctx->error, name))
-		return false;
-
-	free (ctx->error);
-	ctx->error = NULL;
-	return true;
 }
 
 static bool
@@ -1001,7 +997,7 @@ defn (fn_for) {
 	(void) result;
 	for (struct item *v = list->head; v; v = v->next) {
 		struct item *res = NULL;
-		bool ok = set_arg (ctx, 0, v)
+		bool ok = set_single_argument (ctx, v)
 			&& execute (ctx, body->head, &res);
 		item_free_list (res);
 		if (eat_error (ctx, E_BREAK))
@@ -1025,7 +1021,7 @@ defn (fn_map) {
 
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
-		if (!set_arg (ctx, 0, v)
+		if (!set_single_argument (ctx, v)
 		 || !execute (ctx, body->head, out)) {
 			item_free_list (res);
 			return false;
@@ -1046,7 +1042,7 @@ defn (fn_filter) {
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
 		struct item *keep = NULL;
-		if (!set_arg (ctx, 0, v)
+		if (!set_single_argument (ctx, v)
 		 || !execute (ctx, body->head, &keep)) {
 			item_free_list (res);
 			return false;
