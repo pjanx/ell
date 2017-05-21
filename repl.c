@@ -21,6 +21,27 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+static void
+run (struct context *ctx, struct item *program) {
+	struct item *result = NULL;
+	(void) execute (ctx, program, &result);
+	item_free_list (program);
+
+	const char *failure = ctx->error;
+	if (ctx->memory_failure)
+		failure = "memory allocation failure";
+	if (failure) {
+		printf ("\x1b[31m%s: %s\x1b[0m\n", "runtime error", failure);
+		free (ctx->error);
+		ctx->error = NULL;
+		ctx->memory_failure = false;
+	} else {
+		print_tree (result, 0);
+		putchar ('\n');
+		item_free_list (result);
+	}
+}
+
 int
 main (int argc, char *argv[]) {
 	(void) argc;
@@ -43,31 +64,14 @@ main (int argc, char *argv[]) {
 		const char *e = NULL;
 		struct item *program = parser_run (&parser, &e);
 		free (line);
-		if (e) {
+		if (e)
 			printf ("\x1b[31m%s: %s\x1b[0m\n", "parse error", e);
-			parser_free (&parser);
-			continue;
-		}
+		else
+			run (&ctx, program);
 		parser_free (&parser);
-
-		struct item *result = NULL;
-		(void) execute (&ctx, program, &result);
-		item_free_list (program);
-
-		const char *failure = ctx.error;
-		if (ctx.memory_failure)
-			failure = "memory allocation failure";
-		if (failure) {
-			printf ("\x1b[31m%s: %s\x1b[0m\n", "runtime error", failure);
-			free (ctx.error);
-			ctx.error = NULL;
-			ctx.memory_failure = false;
-		} else {
-			print_tree (result, 0);
-			putchar ('\n');
-			item_free_list (result);
-		}
 	}
+
+	putchar ('\n');
 	context_free (&ctx);
 	return 0;
 }
