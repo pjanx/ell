@@ -72,6 +72,9 @@ from the outer scope.
 
 Standard library
 ----------------
+The standard library interprets the empty list and the empty string as false
+values, everything else is taken as true.
+
 `set <name> [<value>]`
 
 Retrieves or sets a named variable.
@@ -88,6 +91,10 @@ Conditional evaluation, strings evaluate to themselves.
 
 Run the body for each element.
 
+`break`
+
+Abort the running loop.
+
 `map <list> <body>`
 
 Transform each element with the given function.
@@ -98,11 +105,27 @@ Return a new list consisting of matching elements only.
 
 `.. [<string>]...`
 
-Concatenates strings.
+Concatenate strings.
 
 `print [<item>]...`
 
-Prints all items in sequence--strings directly, lists as source code.
+Print all items in sequence--strings directly, lists as source code.
+
+`system <command>`
+
+Run a system command and return its return value.
+
+`+`, `-`, `*`, `/`
+
+Arithmetic operations on floating point numbers.
+
+`=`, `<>`, `<`, `>`, `<=`, `>=`
+
+Arithmetic comparisons on floating point numbers.
+
+`eq?`, `ne?`, `lt?`, `gt?`, `le?`, `ge?`
+
+Simple string comparisons.
 
 Contributing and Support
 ------------------------
