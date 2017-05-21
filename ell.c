@@ -1189,6 +1189,36 @@ defn (fn_lt) {
 	return check (ctx, (*result = new_boolean (res)));
 }
 
+defn (fn_equals) {
+	struct item *etalon = args;
+	if (!etalon || etalon->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	bool res = true;
+	for (args = etalon->next; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		if (!(res &= strtod (etalon->value, NULL)
+			== strtod (args->value, NULL)))
+			break;
+	}
+	return check (ctx, (*result = new_boolean (res)));
+}
+
+defn (fn_less) {
+	struct item *etalon = args;
+	if (!etalon || etalon->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	bool res = true;
+	for (args = etalon->next; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		if (!(res &= strtod (etalon->value, NULL) < strtod (args->value, NULL)))
+			break;
+		etalon = args;
+	}
+	return check (ctx, (*result = new_boolean (res)));
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1204,6 +1234,10 @@ init_runtime_library (struct context *ctx) {
 		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2))"          },
 		{ "le?",    "arg _le1 _le2; ge? @_le2 @_le1"                 },
 		{ "gt?",    "arg _gt1 _gt2; lt? @_gt2 @_gt1"                 },
+		{ "<>",     "arg _<>1 _<>2; not (= @_<>1 @_<>2))"            },
+		{ ">=",     "arg _>=1 _>=2; not (< @_>=1 @_>=2))"            },
+		{ "<=",     "arg _<=1 _<=2; >= @_<=2 @_<=1"                  },
+		{ ">",      "arg _>1  _>2;  <  @_>2  @_>1"                   },
 	};
 
 	bool ok = true;
@@ -1245,7 +1279,9 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "and",    fn_and)
 		&& native_register (ctx, "or",     fn_or)
 		&& native_register (ctx, "eq?",    fn_eq)
-		&& native_register (ctx, "lt?",    fn_lt);
+		&& native_register (ctx, "lt?",    fn_lt)
+		&& native_register (ctx, "=",      fn_equals)
+		&& native_register (ctx, "<",      fn_less);
 }
 
 // --- Main --------------------------------------------------------------------
