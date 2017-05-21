@@ -764,8 +764,9 @@ static bool execute_statement (struct context *, struct item *, struct item **);
 static bool execute (struct context *ctx, struct item *body, struct item **);
 
 static bool
-execute_args (struct context *ctx, struct item *args, struct item **res) {
+execute_args (struct context *ctx, struct item *args) {
 	size_t i = 0;
+	struct item *res = NULL, **out = &res;
 	for (; args; args = args->next) {
 		struct item *evaluated = NULL;
 		// Arguments should not evaporate, default to a nil value
@@ -774,10 +775,13 @@ execute_args (struct context *ctx, struct item *args, struct item **res) {
 			goto error;
 		item_free_list (evaluated->next);
 		evaluated->next = NULL;
-		res = &(*res = evaluated)->next;
+		out = &(*out = evaluated)->next;
 		i++;
 	}
+	item_free_list (ctx->arguments);
+	ctx->arguments = res;
 	return true;
+
 error:
 	// Once the code flows like this, at least make some use of it
 	if (can_modify_error (ctx)) {
@@ -786,6 +790,7 @@ error:
 		set_error (ctx, "(argument %zu) -> %s", i, tmp);
 		free (tmp);
 	}
+	item_free_list (res);
 	return false;
 }
 
@@ -795,11 +800,14 @@ execute_native (struct context *ctx, const char *name, struct item *args,
 	struct native_fn *fn = native_find (ctx, name);
 	if (!fn)
 		return set_error (ctx, "unknown function");
+	if (!execute_args (ctx, args))
+		return false;
 
-	struct item *evaluated = NULL;
-	bool ok = execute_args (ctx, args, &evaluated)
-		&& fn->handler (ctx, evaluated, result);
-	item_free_list (evaluated);
+	// "ctx->arguments" is for assign_arguments() only
+	args = ctx->arguments;
+	ctx->arguments = NULL;
+	bool ok = fn->handler (ctx, args, result);
+	item_free_list (args);
 	return ok;
 }
 
@@ -809,16 +817,8 @@ execute_resolved (struct context *ctx, struct item *body, struct item *args,
 	// Resolving names ecursively could be pretty fatal, let's not do that
 	if (body->type == ITEM_STRING)
 		return check (ctx, (*result = new_clone (body)));
-
-	struct item *evaluated = NULL;
-	if (!execute_args (ctx, args, &evaluated)) {
-		item_free_list (evaluated);
-		return false;
-	}
-
-	item_free_list (ctx->arguments);
-	ctx->arguments = evaluated;
-	return execute (ctx, body->head, result);
+	return execute_args (ctx, args)
+		&& execute (ctx, body->head, result);
 }
 
 static bool
