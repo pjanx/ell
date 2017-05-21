@@ -755,6 +755,7 @@ static bool execute (struct context *ctx, struct item *body, struct item **);
 
 static bool
 execute_args (struct context *ctx, struct item *args, struct item **res) {
+	// TODO: prepend "(argument %d) ->" to any resulting error
 	for (; args; args = args->next) {
 		struct item *evaluated = NULL;
 		if (!execute_statement (ctx, args, &evaluated))
@@ -777,33 +778,75 @@ set_arg (struct context *ctx, size_t arg, struct item *value) {
 		&& set (ctx, buf, value);
 }
 
-// TODO: we should probably maintain arguments in a separate list,
-//   either that or at least remember the count so that we can reset them
-// NOTE: it even seems that storing arguments as numbers is completely useless
 static bool
-execute_and_set_args (struct context *ctx, struct item *following) {
-	struct item *args = NULL;
-	if (!execute_args (ctx, following, &args)) {
-		item_free_list (args);
-		return false;
-	}
+execute_native (struct context *ctx, const char *name, struct item *args,
+	struct item **result) {
+	struct native_fn *fn = native_find (ctx, name);
+	if (!fn)
+		return set_error (ctx, "unknown function");
 
-	size_t i = 0;
-	for (struct item *arg = args; arg; arg = arg->next)
-		if (!set_arg (ctx, i++, arg))
-			return false;
-	item_free_list (args);
-	return true;
+	struct item *evaluated = NULL;
+	bool ok = execute_args (ctx, args, &evaluated)
+		&& fn->handler (ctx, evaluated, result);
+	item_free_list (evaluated);
+	return ok;
 }
 
 static bool
-execute_native (struct context *ctx,
-	struct native_fn *fn, struct item *following, struct item **result) {
-	struct item *args = NULL;
-	bool ok = execute_args (ctx, following, &args)
-		&& fn->handler (ctx, args, result);
-	item_free_list (args);
-	return ok;
+execute_resolved (struct context *ctx, struct item *body, struct item *args,
+	struct item **result) {
+	// Resolving names ecursively could be pretty fatal, let's not do that
+	if (body->type == ITEM_STRING)
+		return check (ctx, (*result = new_clone (body)));
+
+	struct item *evaluated = NULL;
+	if (!execute_args (ctx, args, &evaluated)) {
+		item_free_list (evaluated);
+		return false;
+	}
+
+	// TODO: we should probably maintain arguments in a separate list,
+	//   either that or at least remember the count so that we can reset them
+	// NOTE: it even seems that storing them as numbers is completely useless
+	size_t i = 0;
+	for (struct item *arg = evaluated; arg; arg = arg->next)
+		if (!set_arg (ctx, i++, arg)) {
+			item_free_list (evaluated);
+			return false;
+		}
+	item_free_list (evaluated);
+	return execute (ctx, body->head, result);
+}
+
+static bool
+execute_item (struct context *ctx, struct item *body, struct item **result) {
+	struct item *args = body->next;
+	if (body->type == ITEM_STRING) {
+		const char *name = body->value;
+		// TODO: these could be just regular handlers, only top priority
+		if (!strcmp (name, "quote"))
+			return !args || check (ctx, (*result = new_clone_list (args)));
+		if (!strcmp (name, "arg"))
+			return rename_arguments (ctx, args);
+		if ((body = get (ctx, name)))
+			return execute_resolved (ctx, body, args, result);
+		return execute_native (ctx, name, args, result);
+	}
+
+	// When someone tries to call a block directly, we must evaluate it;
+	// e.g. something like `{ choose [@f1 @f2 @f3] } arg1 arg2 arg3`.
+	struct item *evaluated = NULL;
+	if (!execute_statement (ctx, body, &evaluated))
+		return false;
+
+	// It might a bit confusing that this doesn't evaluate arguments
+	// but neither does "quote" and there's nothing to do here
+	if (!evaluated)
+		return true;
+
+	bool success = execute_resolved (ctx, evaluated, args, result);
+	item_free_list (evaluated);
+	return success;
 }
 
 static bool
@@ -814,63 +857,16 @@ execute_statement
 
 	// Executing a nil value results in no value.  It's not very different from
 	// calling a block that returns no value--it's for our callers to resolve.
-	struct item *body;
-	if (!(body = statement->head))
+	if (!statement->head
+	 || execute_item (ctx, statement->head, result))
 		return true;
 
-	struct item *following = body->next;
-	const char *name = "(anonymous)";
-	struct item *destroy = NULL;
-	if (body->type == ITEM_STRING) {
-		name = body->value;
-		// TODO: these could be just regular handlers, only top priority
-		// TODO: these should also get a stack trace the normal way
-		if (!strcmp (name, "quote"))
-			return !following
-				|| check (ctx, (*result = new_clone_list (following)));
-		if (!strcmp (name, "arg"))
-			return rename_arguments (ctx, following);
-		body = get (ctx, name);
-	} else {
-		// When someone tries to call a block directly, we must evaluate it;
-		// e.g. something like `{ choose [@f1 @f2 @f3] } arg1 arg2 arg3`.
-		struct item *evaluated = NULL;
-		if (!execute_statement (ctx, body, &evaluated))
-			return false;
-		// It might a bit confusing that this doesn't evaluate arguments
-		// but neither does "quote" and there's nothing to do here
-		if (!evaluated)
-			return true;
-
-		item_free_list (evaluated->next);
-		evaluated->next = NULL;
-		destroy = body = evaluated;
-	}
-
-	if (!body) {
-		struct native_fn *fn = native_find (ctx, name);
-		if (!fn)
-			return set_error (ctx, "unknown function: %s", name);
-		if (execute_native (ctx, fn, following, result))
-			return true;
-	} else if (body->type == ITEM_STRING) {
-		// Recursion could be pretty fatal, let's not do that
-		if (check (ctx, (*result = new_clone (body)))) {
-			item_free_list (destroy);
-			return true;
-		}
-	} else {
-		// FIXME: this creates a confusing backtrace for argument evaluation
-		if (execute_and_set_args (ctx, following)
-		 && execute (ctx, body->head, result)) {
-			item_free_list (destroy);
-			return true;
-		}
-	}
-
-	item_free_list (destroy);
 	item_free_list (*result);
 	*result = NULL;
+
+	const char *name = "(block)";
+	if (statement->head->type == ITEM_STRING)
+		name = statement->head->value;
 
 	// In that case, `error' is NULL and there's nothing else to do anyway.
 	// Errors starting with an underscore are exceptions and would not work
