@@ -853,6 +853,9 @@ execute_statement
 			return true;
 	}
 
+	item_free_list (*result);
+	*result = NULL;
+
 	// In that case, `error' is NULL and there's nothing else to do anyway
 	if (!ctx->memory_failure) {
 		// This creates some form of a stack trace
