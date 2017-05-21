@@ -622,50 +622,23 @@ parser_run (struct parser *self, const char **e) {
 
 // --- Runtime -----------------------------------------------------------------
 
-struct context;
-typedef bool (*handler_fn) (struct context *, struct item *, struct item **);
-
-struct native_fn {
-	struct native_fn *next;             ///< The next link in the chain
-	handler_fn handler;                 ///< Internal C handler, or NULL
-	char name[];                        ///< The name of the function
-};
-
-struct native_fn *g_native;             ///< Maps words to functions
-
-static struct native_fn *
-native_find (const char *name) {
-	for (struct native_fn *fn = g_native; fn; fn = fn->next)
-		if (!strcmp (fn->name, name))
-			return fn;
-	return NULL;
-}
-
-static bool
-native_register (const char *name, handler_fn handler) {
-	struct native_fn *fn = native_find (name);
-	if (!fn) {
-		if (!(fn = calloc (1, sizeof *fn + strlen (name) + 1)))
-			return false;
-		strcpy (fn->name, name);
-		fn->next = g_native;
-		g_native = fn;
-	}
-
-	fn->handler = handler;
-	return true;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 struct context {
 	struct item *variables;             ///< List of variables
+	struct native_fn *native;           ///< Maps strings to C functions
 
 	char *error;                        ///< Error information
 	bool error_is_fatal;                ///< Whether the error can be catched
 	bool memory_failure;                ///< Memory allocation failure
 
 	void *user_data;                    ///< User data
+};
+
+typedef bool (*handler_fn) (struct context *, struct item *, struct item **);
+
+struct native_fn {
+	struct native_fn *next;             ///< The next link in the chain
+	handler_fn handler;                 ///< Internal C handler, or NULL
+	char name[];                        ///< The name of the function
 };
 
 static void
@@ -675,6 +648,11 @@ context_init (struct context *ctx) {
 
 static void
 context_free (struct context *ctx) {
+	struct native_fn *next, *iter;
+	for (iter = ctx->native; iter; iter = next) {
+		next = iter->next;
+		free (iter);
+	}
 	item_free_list (ctx->variables);
 	free (ctx->error);
 }
@@ -714,6 +692,30 @@ set (struct context *ctx, const char *name, struct item *value) {
 	key->next = value;
 	pair->next = ctx->variables;
 	ctx->variables = pair;
+	return true;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static struct native_fn *
+native_find (struct context *ctx, const char *name) {
+	for (struct native_fn *fn = ctx->native; fn; fn = fn->next)
+		if (!strcmp (fn->name, name))
+			return fn;
+	return NULL;
+}
+
+static bool
+native_register (struct context *ctx, const char *name, handler_fn handler) {
+	struct native_fn *fn = native_find (ctx, name);
+	if (!fn) {
+		if (!(fn = calloc (1, sizeof *fn + strlen (name) + 1)))
+			return false;
+		strcpy (fn->name, name);
+		fn->next = ctx->native;
+		ctx->native = fn;
+	}
+	fn->handler = handler;
 	return true;
 }
 
@@ -795,10 +797,10 @@ execute_and_set_args (struct context *ctx, struct item *following) {
 
 static bool
 execute_native (struct context *ctx,
-	struct native_fn *fn, struct item *next, struct item **res) {
+	struct native_fn *fn, struct item *following, struct item **result) {
 	struct item *args = NULL;
-	bool ok = execute_args (ctx, next, &args)
-		&& fn->handler (ctx, args, res);
+	bool ok = execute_args (ctx, following, &args)
+		&& fn->handler (ctx, args, result);
 	item_free_list (args);
 	return ok;
 }
@@ -839,7 +841,7 @@ execute_statement
 	//   Maybe something like (choose [@f1 @f2 @f3]) arg1 arg2 arg3
 
 	if (!body) {
-		struct native_fn *fn = native_find (name);
+		struct native_fn *fn = native_find (ctx, name);
 		if (!fn)
 			return set_error (ctx, "unknown function: %s", name);
 		if (execute_native (ctx, fn, following, result))
@@ -1068,34 +1070,7 @@ defn (fn_concatenate) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
-init_native_library (void)
-{
-	return native_register ("set",    fn_set)
-		&& native_register ("list",   fn_list)
-		&& native_register ("if",     fn_if)
-		&& native_register ("for",    fn_for)
-		&& native_register ("break",  fn_break)
-		&& native_register ("map",    fn_map)
-		&& native_register ("filter", fn_filter)
-		&& native_register ("print",  fn_print)
-		&& native_register ("..",     fn_concatenate);
-}
-
-static void
-free_native_library (void) {
-	struct native_fn *next, *iter;
-	for (iter = g_native; iter; iter = next) {
-		next = iter->next;
-		free (iter);
-	}
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-static bool
 init_runtime_library (struct context *ctx) {
-	bool ok = true;
-
 	struct {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
@@ -1105,6 +1080,7 @@ init_runtime_library (struct context *ctx) {
 		{ "unless", "arg cond body; if (not (eval @cond)) @body" },
 	};
 
+	bool ok = true;
 	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
 		struct parser parser;
 		parser_init (&parser,
@@ -1123,7 +1099,17 @@ init_runtime_library (struct context *ctx) {
 		item_free_list (body);
 		parser_free (&parser);
 	}
-	return ok;
+
+	return ok
+		&& native_register (ctx, "set",    fn_set)
+		&& native_register (ctx, "list",   fn_list)
+		&& native_register (ctx, "if",     fn_if)
+		&& native_register (ctx, "for",    fn_for)
+		&& native_register (ctx, "break",  fn_break)
+		&& native_register (ctx, "map",    fn_map)
+		&& native_register (ctx, "filter", fn_filter)
+		&& native_register (ctx, "print",  fn_print)
+		&& native_register (ctx, "..",     fn_concatenate);
 }
 
 // --- Main --------------------------------------------------------------------
@@ -1161,8 +1147,7 @@ main (int argc, char *argv[]) {
 
 	struct context ctx;
 	context_init (&ctx);
-	if (!init_native_library ()
-	 || !init_runtime_library (&ctx))
+	if (!init_runtime_library (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
 
 	struct item *result = NULL;
@@ -1176,8 +1161,6 @@ main (int argc, char *argv[]) {
 	if (failure)
 		printf ("%s: %s\n", "runtime error", failure);
 	context_free (&ctx);
-
-	free_native_library ();
 	return 0;
 }
 
