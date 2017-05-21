@@ -4,7 +4,7 @@ all: interpreter
 interpreter: interpreter.c ell.c
 	$(CC) $(CFLAGS) $< -o $@
 repl: repl.c ell.c
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $< -o $@ -lreadline
 clean:
 	rm -f interpreter repl
 .PHONY: all clean

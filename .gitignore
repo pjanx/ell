@@ -1,6 +1,7 @@
 # Build files
 /build
-/ell
+/interpreter
+/repl
 
 # Qt Creator files
 /CMakeLists.txt.user*
