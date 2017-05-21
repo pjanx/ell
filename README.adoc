@@ -65,9 +65,7 @@ Returns the first argument.
 
 `arg <name>...`
 
-Reassigns arguments to the current call in order to given names.  This must be a
-special form because of the lack of variable scoping.  It needs to see arguments
-from the outer scope.
+Assigns arguments to the current call in order to given names.
 
 Standard library
 ----------------
@@ -78,7 +76,7 @@ values, everything else is taken as true.
 
 Retrieve or set a named variable.  The syntax sugar for retrieval is `@`.
 
-`list`
+`list [<item>]...`
 
 Return a list made of given arguments.  The syntax sugar for lists is `[]`.
 
