@@ -756,11 +756,12 @@ execute_args (struct context *ctx, struct item *args, struct item **res) {
 		struct item *evaluated = NULL;
 		if (!execute_statement (ctx, args, &evaluated))
 			return false;
-		if (evaluated) {
-			item_free_list (evaluated->next);
-			evaluated->next = NULL;
-			res = &(*res = evaluated)->next;
-		}
+		// Arguments should not evaporate, default to a nil value
+		if (!evaluated && !check (ctx, (evaluated = new_list (NULL))))
+			return false;
+		item_free_list (evaluated->next);
+		evaluated->next = NULL;
+		res = &(*res = evaluated)->next;
 	}
 	return true;
 }
@@ -806,8 +807,8 @@ execute_statement
 	if (statement->type == ITEM_STRING)
 		return check (ctx, (*result = new_clone (statement)));
 
-	// XXX: should this ever happen and what are the consequences?
-	//   Shouldn't we rather clone the empty list?
+	// Executing a nil value results in no value.  It's not very different from
+	// calling a block that returns no value--it's for our callers to resolve.
 	struct item *body;
 	if (!(body = statement->head))
 		return true;
