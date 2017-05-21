@@ -1246,8 +1246,7 @@ init_runtime_library (struct context *ctx) {
 		const char *name;               ///< Name of the function
 		const char *definition;         ///< The defining script
 	} functions[] = {
-		// FIXME: this "unless" is probably not going to work
-		{ "unless", "arg _cond _body; if (not (eval @_cond)) @_body" },
+		{ "unless", "arg _cond _body; if (not (@_cond)) @_body"      },
 		// TODO: we should be able to apply them to all arguments
 		{ "ne?",    "arg _ne1 _ne2; not (eq? @_ne1 @_ne2)"           },
 		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2)"           },
