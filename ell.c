@@ -416,7 +416,8 @@ print_tree (struct item *tree, int level) {
 			printf ("%*s", level, "");
 		if (iter->type == ITEM_STRING) {
 			print_string (iter->value);
-		} else if (iter->head->type == ITEM_STRING
+		} else if (iter->head
+			&& iter->head->type == ITEM_STRING
 			&& !strcmp (iter->head->value, "list")) {
 			printf ("[");
 			print_tree (iter->head->next, level + 1);
