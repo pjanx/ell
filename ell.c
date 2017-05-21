@@ -819,6 +819,7 @@ execute_statement
 
 	struct item *following = body->next;
 	const char *name = "(anonymous)";
+	struct item *destroy = NULL;
 	if (body->type == ITEM_STRING) {
 		name = body->value;
 		// TODO: these could be just regular handlers, only top priority
@@ -829,16 +830,21 @@ execute_statement
 		if (!strcmp (name, "arg"))
 			return rename_arguments (ctx, following);
 		body = get (ctx, name);
-	}
+	} else {
+		// When someone tries to call a block directly, we must evaluate it;
+		// e.g. something like `{ choose [@f1 @f2 @f3] } arg1 arg2 arg3`.
+		struct item *evaluated = NULL;
+		if (!execute_statement (ctx, body, &evaluated))
+			return false;
+		// It might a bit confusing that this doesn't evaluate arguments
+		// but neither does "quote" and there's nothing to do here
+		if (!evaluated)
+			return true;
 
-	// XXX: not sure whether it makes more sense to evaluate a list
-	//   instead of leaving it as it is -> probably evaluate, since then
-	//   lambdas will be better: { arg _n; print @_n } 'hello\n'
-	//
-	//   Even though it's practically useless being able to dereference
-	//   function names directly that way: `@list 1 2 3` vs `list 1 2 3`
-	//
-	//   Maybe something like (choose [@f1 @f2 @f3]) arg1 arg2 arg3
+		item_free_list (evaluated->next);
+		evaluated->next = NULL;
+		destroy = body = evaluated;
+	}
 
 	if (!body) {
 		struct native_fn *fn = native_find (ctx, name);
@@ -848,15 +854,20 @@ execute_statement
 			return true;
 	} else if (body->type == ITEM_STRING) {
 		// Recursion could be pretty fatal, let's not do that
-		if (check (ctx, (*result = new_clone (body))))
+		if (check (ctx, (*result = new_clone (body)))) {
+			item_free_list (destroy);
 			return true;
+		}
 	} else {
 		// FIXME: this creates a confusing backtrace for argument evaluation
 		if (execute_and_set_args (ctx, following)
-		 && execute (ctx, body->head, result))
+		 && execute (ctx, body->head, result)) {
+			item_free_list (destroy);
 			return true;
+		}
 	}
 
+	item_free_list (destroy);
 	item_free_list (*result);
 	*result = NULL;
 
