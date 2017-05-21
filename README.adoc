@@ -29,7 +29,7 @@ The parser, however, does a bunch of transformations:
 
 As an example, consider the following snippet:
 
- print (if { = @var foo } {
+ print (if { eq? @var foo } {
      quote 'Hello world\n'
  } else {
      quote 'Error\n'
@@ -37,7 +37,7 @@ As an example, consider the following snippet:
 
 which gets expanded to the following:
 
- ((print (if (quote ((= (set var) foo)))
+ ((print (if (quote ((eq? (set var) foo)))
              (quote ((quote 'Hello world\n')))
              else
              (quote ((quote 'Error\n'))))))

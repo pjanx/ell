@@ -1159,6 +1159,35 @@ defn (fn_or) {
 	return check (ctx, (*result = new_boolean (res)));
 }
 
+defn (fn_eq) {
+	struct item *etalon = args;
+	if (!etalon || etalon->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	bool res = true;
+	for (args = etalon->next; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		if (!(res &= !strcmp (etalon->value, args->value)))
+			break;
+	}
+	return check (ctx, (*result = new_boolean (res)));
+}
+
+defn (fn_lt) {
+	struct item *etalon = args;
+	if (!etalon || etalon->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	bool res = true;
+	for (args = etalon->next; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		if (!(res &= strcmp (etalon->value, args->value) < 0))
+			break;
+		etalon = args;
+	}
+	return check (ctx, (*result = new_boolean (res)));
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1209,7 +1238,9 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "/",      fn_divide)
 		&& native_register (ctx, "not",    fn_not)
 		&& native_register (ctx, "and",    fn_and)
-		&& native_register (ctx, "or",     fn_or);
+		&& native_register (ctx, "or",     fn_or)
+		&& native_register (ctx, "eq?",    fn_eq)
+		&& native_register (ctx, "lt?",    fn_lt);
 }
 
 // --- Main --------------------------------------------------------------------
