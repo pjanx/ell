@@ -735,6 +735,14 @@ set_error (struct context *ctx, const char *format, ...) {
 }
 
 static bool
+can_modify_error (struct context *ctx) {
+	// In that case, `error' is NULL and there's nothing else to do anyway.
+	// Errors starting with an underscore are exceptions and would not work
+	// with stack traces generated this way.
+	return !ctx->memory_failure && ctx->error[0] != '_';
+}
+
+static bool
 assign_arguments (struct context *ctx, struct item *names) {
 	struct item *arg = ctx->arguments;
 	for (; names; names = names->next) {
@@ -757,19 +765,28 @@ static bool execute (struct context *ctx, struct item *body, struct item **);
 
 static bool
 execute_args (struct context *ctx, struct item *args, struct item **res) {
-	// TODO: prepend "(argument %d) ->" to any resulting error
+	size_t i = 0;
 	for (; args; args = args->next) {
 		struct item *evaluated = NULL;
-		if (!execute_statement (ctx, args, &evaluated))
-			return false;
 		// Arguments should not evaporate, default to a nil value
-		if (!evaluated && !check (ctx, (evaluated = new_list (NULL))))
-			return false;
+		if (!execute_statement (ctx, args, &evaluated)
+		 || (!evaluated && !check (ctx, (evaluated = new_list (NULL)))))
+			goto error;
 		item_free_list (evaluated->next);
 		evaluated->next = NULL;
 		res = &(*res = evaluated)->next;
+		i++;
 	}
 	return true;
+error:
+	// Once the code flows like this, at least make some use of it
+	if (can_modify_error (ctx)) {
+		char *tmp = ctx->error;
+		ctx->error = NULL;
+		set_error (ctx, "(argument %zu) -> %s", i, tmp);
+		free (tmp);
+	}
+	return false;
 }
 
 static bool
@@ -854,10 +871,7 @@ execute_statement
 	if (statement->head->type == ITEM_STRING)
 		name = statement->head->value;
 
-	// In that case, `error' is NULL and there's nothing else to do anyway.
-	// Errors starting with an underscore are exceptions and would not work
-	// with stack traces generated this way.
-	if (!ctx->memory_failure && ctx->error[0] != '_') {
+	if (can_modify_error (ctx)) {
 		char *tmp = ctx->error;
 		ctx->error = NULL;
 		set_error (ctx, "%s -> %s", name, tmp);
