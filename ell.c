@@ -1093,6 +1093,50 @@ defn (fn_system) {
 	return check (ctx, (*result = new_format ("%d", system (command->value))));
 }
 
+defn (fn_plus) {
+	double res = 0.0;
+	for (; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		res += strtod (args->value, NULL);
+	}
+	return check (ctx, (*result = new_format ("%f", res)));
+}
+
+defn (fn_minus) {
+	double res = -0.0;
+	for (; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		res -= strtod (args->value, NULL);
+	}
+	return check (ctx, (*result = new_format ("%f", res)));
+}
+
+defn (fn_multiply) {
+	double res = 1.0;
+	for (; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		res *= strtod (args->value, NULL);
+	}
+	return check (ctx, (*result = new_format ("%f", res)));
+}
+
+defn (fn_divide) {
+	if (!args || args->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	double res = strtod (args->value, NULL), x;
+	for (args = args->next; args; args = args->next) {
+		if (args->type != ITEM_STRING)
+			return set_error (ctx, "arguments must be strings");
+		if (!(x = strtod (args->value, NULL)))
+			return set_error (ctx, "division by zero");
+		res /= x;
+	}
+	return check (ctx, (*result = new_format ("%f", res)));
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1136,7 +1180,11 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "filter", fn_filter)
 		&& native_register (ctx, "print",  fn_print)
 		&& native_register (ctx, "..",     fn_concatenate)
-		&& native_register (ctx, "system", fn_system);
+		&& native_register (ctx, "system", fn_system)
+		&& native_register (ctx, "+",      fn_plus)
+		&& native_register (ctx, "-",      fn_minus)
+		&& native_register (ctx, "*",      fn_multiply)
+		&& native_register (ctx, "/",      fn_divide);
 }
 
 // --- Main --------------------------------------------------------------------
