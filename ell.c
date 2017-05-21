@@ -923,6 +923,8 @@ truthy (struct item *item) {
 		&& ((item->type == ITEM_STRING && item->len != 0) || item->head);
 }
 
+static struct item * new_boolean (bool b) { return new_string ("1", b); }
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 defn (fn_set) {
@@ -1137,6 +1139,26 @@ defn (fn_divide) {
 	return check (ctx, (*result = new_number (res)));
 }
 
+defn (fn_not) {
+	if (!args)
+		return set_error (ctx, "missing argument");
+	return check (ctx, (*result = new_boolean (!truthy (args))));
+}
+
+defn (fn_and) {
+	bool res = true;
+	for (; args; args = args->next)
+		 res &= truthy (args);
+	return check (ctx, (*result = new_boolean (res)));
+}
+
+defn (fn_or) {
+	bool res = false;
+	for (; args; args = args->next)
+		 res |= truthy (args);
+	return check (ctx, (*result = new_boolean (res)));
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1184,7 +1206,10 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "+",      fn_plus)
 		&& native_register (ctx, "-",      fn_minus)
 		&& native_register (ctx, "*",      fn_multiply)
-		&& native_register (ctx, "/",      fn_divide);
+		&& native_register (ctx, "/",      fn_divide)
+		&& native_register (ctx, "not",    fn_not)
+		&& native_register (ctx, "and",    fn_and)
+		&& native_register (ctx, "or",     fn_or);
 }
 
 // --- Main --------------------------------------------------------------------
