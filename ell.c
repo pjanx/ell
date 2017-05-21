@@ -858,9 +858,10 @@ execute_statement
 	item_free_list (*result);
 	*result = NULL;
 
-	// In that case, `error' is NULL and there's nothing else to do anyway
-	if (!ctx->memory_failure) {
-		// This creates some form of a stack trace
+	// In that case, `error' is NULL and there's nothing else to do anyway.
+	// Errors starting with an underscore are exceptions and would not work
+	// with stack traces generated this way.
+	if (!ctx->memory_failure && ctx->error[0] != '_') {
 		char *tmp = ctx->error;
 		set_error (ctx, "%s -> %s", name, tmp);
 		free (tmp);
@@ -885,11 +886,25 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 #define defn(name) static bool name \
 	(struct context *ctx, struct item *args, struct item **result)
 
+#define E_BREAK "_break"
+
+static bool
+eat_error (struct context *ctx, const char *name) {
+	if (!ctx->error || strcmp (ctx->error, name))
+		return false;
+
+	free (ctx->error);
+	ctx->error = NULL;
+	return true;
+}
+
 static bool
 truthy (struct item *item) {
 	return item
 		&& ((item->type == ITEM_STRING && item->len != 0) || item->head);
 }
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 defn (fn_set) {
 	struct item *name = args;
@@ -946,7 +961,6 @@ defn (fn_if) {
 	return true;
 }
 
-// TODO: how to break out of the loop?  Catchable error?  Special value?
 defn (fn_for) {
 	struct item *list = args, *body;
 	if (!list || list->type != ITEM_LIST)
@@ -960,10 +974,16 @@ defn (fn_for) {
 		bool ok = set_arg (ctx, 0, v)
 			&& execute (ctx, body->head, &res);
 		item_free_list (res);
+		if (eat_error (ctx, E_BREAK))
+			break;
 		if (!ok)
 			return false;
 	}
 	return true;
+}
+
+defn (fn_break) {
+	(void) args; (void) result; return set_error (ctx, E_BREAK);
 }
 
 defn (fn_map) {
@@ -1054,6 +1074,7 @@ init_native_library (void)
 		&& native_register ("list",   fn_list)
 		&& native_register ("if",     fn_if)
 		&& native_register ("for",    fn_for)
+		&& native_register ("break",  fn_break)
 		&& native_register ("map",    fn_map)
 		&& native_register ("filter", fn_filter)
 		&& native_register ("print",  fn_print)
