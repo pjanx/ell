@@ -888,6 +888,23 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 #define defn(name) static bool name \
 	(struct context *ctx, struct item *args, struct item **result)
 
+static struct item *new_format (const char *fmt, ...) ATTRIBUTE_PRINTF (1, 2);
+
+static struct item *
+new_format (const char *fmt, ...) {
+	va_list ap;
+	va_start (ap, fmt);
+	char *s = vformat (fmt, ap);
+	va_end (ap);
+
+	if (!s)
+		return NULL;
+
+	struct item *item = new_string (s, strlen (s));
+	free (s);
+	return item;
+}
+
 #define E_BREAK "_break"
 
 static bool
@@ -1067,6 +1084,15 @@ defn (fn_concatenate) {
 	return ok;
 }
 
+defn (fn_system) {
+	struct item *command = args;
+	if (!command || command->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	if (command->next)
+		return set_error (ctx, "cannot deal with multiple arguments");
+	return check (ctx, (*result = new_format ("%d", system (command->value))));
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
@@ -1109,7 +1135,8 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "map",    fn_map)
 		&& native_register (ctx, "filter", fn_filter)
 		&& native_register (ctx, "print",  fn_print)
-		&& native_register (ctx, "..",     fn_concatenate);
+		&& native_register (ctx, "..",     fn_concatenate)
+		&& native_register (ctx, "system", fn_system);
 }
 
 // --- Main --------------------------------------------------------------------
