@@ -864,6 +864,7 @@ execute_statement
 	// with stack traces generated this way.
 	if (!ctx->memory_failure && ctx->error[0] != '_') {
 		char *tmp = ctx->error;
+		ctx->error = NULL;
 		set_error (ctx, "%s -> %s", name, tmp);
 		free (tmp);
 	}
