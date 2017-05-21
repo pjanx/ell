@@ -888,17 +888,17 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 #define defn(name) static bool name \
 	(struct context *ctx, struct item *args, struct item **result)
 
-static struct item *new_format (const char *fmt, ...) ATTRIBUTE_PRINTF (1, 2);
-
 static struct item *
-new_format (const char *fmt, ...) {
-	va_list ap;
-	va_start (ap, fmt);
-	char *s = vformat (fmt, ap);
-	va_end (ap);
-
-	if (!s)
+new_number (double n) {
+	char *s;
+	if (!(s = format ("%f", n)))
 		return NULL;
+
+	char *p = strchr (s, 0);
+	while (--p > s && *p == '0')
+		*p = 0;
+	if (*p == '.')
+		*p = 0;
 
 	struct item *item = new_string (s, strlen (s));
 	free (s);
@@ -1090,7 +1090,7 @@ defn (fn_system) {
 		return set_error (ctx, "first argument must be string");
 	if (command->next)
 		return set_error (ctx, "cannot deal with multiple arguments");
-	return check (ctx, (*result = new_format ("%d", system (command->value))));
+	return check (ctx, (*result = new_number (system (command->value))));
 }
 
 defn (fn_plus) {
@@ -1100,17 +1100,17 @@ defn (fn_plus) {
 			return set_error (ctx, "arguments must be strings");
 		res += strtod (args->value, NULL);
 	}
-	return check (ctx, (*result = new_format ("%f", res)));
+	return check (ctx, (*result = new_number (res)));
 }
 
 defn (fn_minus) {
-	double res = -0.0;
+	double res = 0.0;
 	for (; args; args = args->next) {
 		if (args->type != ITEM_STRING)
 			return set_error (ctx, "arguments must be strings");
 		res -= strtod (args->value, NULL);
 	}
-	return check (ctx, (*result = new_format ("%f", res)));
+	return check (ctx, (*result = new_number (res)));
 }
 
 defn (fn_multiply) {
@@ -1120,7 +1120,7 @@ defn (fn_multiply) {
 			return set_error (ctx, "arguments must be strings");
 		res *= strtod (args->value, NULL);
 	}
-	return check (ctx, (*result = new_format ("%f", res)));
+	return check (ctx, (*result = new_number (res)));
 }
 
 defn (fn_divide) {
@@ -1134,7 +1134,7 @@ defn (fn_divide) {
 			return set_error (ctx, "division by zero");
 		res /= x;
 	}
-	return check (ctx, (*result = new_format ("%f", res)));
+	return check (ctx, (*result = new_number (res)));
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
