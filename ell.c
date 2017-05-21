@@ -694,21 +694,24 @@ get (struct context *ctx, const char *name) {
 
 static bool
 set (struct context *ctx, const char *name, struct item *value) {
-	struct item *iter, *key, *pair;
-	for (iter = ctx->variables; iter; iter = iter->next)
-		if (!strcmp (iter->head->value, name))
+	struct item **p;
+	for (p = &ctx->variables; *p; p = &(*p)->next)
+		if (!strcmp ((*p)->head->value, name)) {
+			struct item *tmp = *p;
+			*p = (*p)->next;
+			item_free (tmp);
 			break;
-	if (iter) {
-		item_free (iter->head->next);
-		return check (ctx, (iter->head->next = new_clone (value)));
-	}
+		}
+	if (!value)
+		return true;
+
+	struct item *key, *pair;
 	if (!check (ctx, (key = new_string (name, strlen (name))))
-	 || !check (ctx, (pair = new_list (key))))
-		return false;
-	if (!check (ctx, (key->next = new_clone (value)))) {
-		item_free (pair);
+	 || !check (ctx, (pair = new_list (key)))) {
+		item_free_list (value);
 		return false;
 	}
+	key->next = value;
 	pair->next = ctx->variables;
 	ctx->variables = pair;
 	return true;
@@ -731,16 +734,14 @@ static bool
 rename_arguments (struct context *ctx, struct item *names) {
 	size_t i = 0;
 	for (; names; names = names->next) {
+		if (names->type != ITEM_STRING)
+			return set_error (ctx, "argument names must be strings");
+
 		char buf[64];
 		(void) snprintf (buf, sizeof buf, "%zu", i++);
 		struct item *value = get (ctx, buf);
-
-		// TODO: set to some sort of nil value?
-		if (!value)
-			return true;
-
-		if (names->type != ITEM_STRING)
-			return set_error (ctx, "argument names must be strings");
+		if (value && !check (ctx, (value = new_clone (value))))
+			return false;
 		if (!set (ctx, names->value, value))
 			return false;
 	}
@@ -770,7 +771,8 @@ static bool
 set_arg (struct context *ctx, size_t arg, struct item *value) {
 	char buf[64];
 	(void) snprintf (buf, sizeof buf, "%zu", arg);
-	return set (ctx, buf, value);
+	return check (ctx, (value = new_clone (value)))
+		&& set (ctx, buf, value);
 }
 
 // TODO: we should probably maintain arguments in a separate list,
@@ -896,7 +898,8 @@ defn (fn_set) {
 
 	struct item *value;
 	if ((value = name->next))
-		return set (ctx, name->value, value);
+		return check (ctx, (value = new_clone (value)))
+			&& set (ctx, name->value, value);
 
 	// We return an empty list for a nil value
 	if (!(value = get (ctx, name->value)))
@@ -1091,8 +1094,11 @@ init_runtime_library (struct context *ctx) {
 			printf ("error parsing internal function `%s': %s\n",
 				functions[i].name, e);
 			ok = false;
+		} else if (!check (ctx, (body = new_list (body)))
+			|| !set (ctx, functions[i].name, body)) {
+			ok = false;
 		} else
-			ok &= set (ctx, functions[i].name, body);
+			body = NULL;
 		item_free_list (body);
 		parser_free (&parser);
 	}
