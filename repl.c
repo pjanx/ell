@@ -45,14 +45,42 @@ run (struct context *ctx, struct item *program) {
 static int
 init_readline (void) {
 	rl_variable_bind ("blink-matching-paren", "on");
+	rl_bind_key (TAB, rl_named_function ("possible-completions"));
 	return 0;
+}
+
+struct context ctx;
+
+static char **
+complete (const char *text, int start, int end) {
+	// Don't iterate over filenames and stuff
+	rl_attempted_completion_over = true;
+
+	static char *buf[128];
+	size_t n = 1, len = strlen (text);
+	for (struct item *item = ctx.variables; item; item = item->next)
+		if (n < 127 && !strncmp (item->head->value, text, len))
+			buf[n++] = format ("%s", item->head->value);
+	for (struct native_fn *iter = ctx.native; iter; iter = iter->next)
+		if (n < 127 && !strncmp (iter->name, text, len))
+			buf[n++] = format ("%s", iter->name);
+	if (n < 2)
+		return NULL;
+
+	// This never actually completes anything, just shows the options,
+	// we'd have to figure out the longest common prefix
+	buf[0] = format ("%s", text);
+
+	buf[n++] = NULL;
+	char **copy = malloc (sizeof *buf * n);
+	memcpy (copy, buf, sizeof *buf * n);
+	return copy;
 }
 
 int
 main (int argc, char *argv[]) {
 	(void) argc;
 
-	struct context ctx;
 	context_init (&ctx);
 	if (!init_runtime_library (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
@@ -61,6 +89,7 @@ main (int argc, char *argv[]) {
 	const char *slash = strrchr (argv[0], '/');
 	rl_readline_name = slash ? ++slash : argv[0];
 	rl_startup_hook = init_readline;
+	rl_attempted_completion_function = complete;
 
 	char *line;
 	while ((line = readline ("> "))) {
