@@ -42,6 +42,12 @@ run (struct context *ctx, struct item *program) {
 	}
 }
 
+static int
+init_readline (void) {
+	rl_variable_bind ("blink-matching-paren", "on");
+	return 0;
+}
+
 int
 main (int argc, char *argv[]) {
 	(void) argc;
@@ -54,6 +60,7 @@ main (int argc, char *argv[]) {
 	using_history ();
 	const char *slash = strrchr (argv[0], '/');
 	rl_readline_name = slash ? ++slash : argv[0];
+	rl_startup_hook = init_readline;
 
 	char *line;
 	while ((line = readline ("> "))) {
