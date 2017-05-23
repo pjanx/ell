@@ -1046,36 +1046,6 @@ defn (fn_map) {
 	return check (ctx, (*result = new_list (res)));
 }
 
-defn (fn_filter) {
-	struct item *body = args, *values;
-	if (!body || body->type != ITEM_LIST)
-		return set_error (ctx, "first argument must be a function");
-	if (!(values = body->next) || values->type != ITEM_LIST)
-		return set_error (ctx, "second argument must be a list");
-
-	struct item *res = NULL, **out = &res;
-	for (struct item *v = values->head; v; v = v->next) {
-		struct item *keep = NULL;
-		if (!set_single_argument (ctx, v)
-		 || !execute (ctx, body->head, &keep)) {
-			item_free_list (res);
-			return false;
-		}
-		bool match = truthy (keep);
-		item_free_list (keep);
-		if (!match)
-			continue;
-
-		struct item *copy;
-		if (!check (ctx, (copy = new_clone (v)))) {
-			item_free_list (res);
-			return false;
-		}
-		out = &(*out = copy)->next;
-	}
-	return check (ctx, (*result = new_list (res)));
-}
-
 defn (fn_print) {
 	(void) result;
 	for (; args; args = args->next) {
@@ -1247,6 +1217,8 @@ init_runtime_library (struct context *ctx) {
 		const char *definition;         ///< The defining script
 	} functions[] = {
 		{ "unless", "arg _cond _body; if (not (@_cond)) @_body"      },
+		{ "filter", "arg _body _list; map {"
+		  "arg _item; if (@_body @_item) { @_item } } @_list"        },
 		// TODO: we should be able to apply them to all arguments
 		{ "ne?",    "arg _ne1 _ne2; not (eq? @_ne1 @_ne2)"           },
 		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2)"           },
@@ -1285,7 +1257,6 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "for",    fn_for)
 		&& native_register (ctx, "break",  fn_break)
 		&& native_register (ctx, "map",    fn_map)
-		&& native_register (ctx, "filter", fn_filter)
 		&& native_register (ctx, "print",  fn_print)
 		&& native_register (ctx, "..",     fn_concatenate)
 		&& native_register (ctx, "system", fn_system)
