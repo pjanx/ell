@@ -23,7 +23,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
-#include <assert.h>
 #include <stdbool.h>
 #include <setjmp.h>
 
@@ -215,19 +214,12 @@ struct lexer {
 /// Input has to be null-terminated anyway
 static void
 lexer_init (struct lexer *self, const char *p, size_t len) {
-	memset (self, 0, sizeof *self);
-	self->p = p;
-	self->len = len;
+	*self = (struct lexer) { .p = p, .len = len };
 }
 
 static void
 lexer_free (struct lexer *self) {
 	free (self->string.s);
-}
-
-static bool lexer_is_ignored (int c) { return strchr (" \t", c); }
-static bool lexer_is_word_char (int c) {
-	return !lexer_is_ignored (c) && !strchr ("()[]{}\n;@#'", c);
 }
 
 static int
@@ -245,58 +237,38 @@ lexer_advance (struct lexer *self) {
 
 static bool
 lexer_hexa_escape (struct lexer *self, struct buffer *output) {
-	int i;
-	unsigned char code = 0;
-
-	for (i = 0; self->len && i < 2; i++) {
-		unsigned char c = tolower (*self->p);
-		if (c >= '0' && c <= '9')
-			code = (code << 4) | (c - '0');
-		else if (c >= 'a' && c <= 'f')
-			code = (code << 4) | (c - 'a' + 10);
-		else
-			break;
-
-		lexer_advance (self);
-	}
-
-	if (!i)
+	const char *alphabet = "0123456789abcdef", *h, *l;
+	if (!self->len || !(h = strchr (alphabet, tolower (lexer_advance (self))))
+	 || !self->len || !(l = strchr (alphabet, tolower (lexer_advance (self)))))
 		return false;
 
-	buffer_append_c (output, code);
+	buffer_append_c (output, (h - alphabet) << 4 | (l - alphabet));
 	return true;
 }
+
+enum { LEXER_STRING_QUOTE = '\'', LEXER_ESCAPE = '\\', LEXER_COMMENT = '#' };
+static bool lexer_is_whitespace (int c) { return !c || c == ' ' || c == '\t'; }
+
+static unsigned char lexer_escapes[256] = {
+	[LEXER_STRING_QUOTE] = LEXER_STRING_QUOTE, [LEXER_ESCAPE] = LEXER_ESCAPE,
+	['a'] = '\a', ['b'] = '\b', ['n'] = '\n', ['r'] = '\r', ['t'] = '\t',
+};
 
 static const char *
 lexer_escape_sequence (struct lexer *self, struct buffer *output) {
 	if (!self->len)
 		return "premature end of escape sequence";
 
-	unsigned char c = *self->p;
-	switch (c) {
-	case '"':              break;
-	case '\\':             break;
-	case 'a':   c = '\a';  break;
-	case 'b':   c = '\b';  break;
-	case 'f':   c = '\f';  break;
-	case 'n':   c = '\n';  break;
-	case 'r':   c = '\r';  break;
-	case 't':   c = '\t';  break;
-	case 'v':   c = '\v';  break;
-
-	case 'x':
-	case 'X':
-		lexer_advance (self);
+	unsigned char c = lexer_advance (self);
+	if (c == 'x') {
 		if (lexer_hexa_escape (self, output))
 			return NULL;
 		return "invalid hexadecimal escape";
-
-	default:
-		return "unknown escape sequence";
 	}
+	if (!(c = lexer_escapes[c]))
+		return "unknown escape sequence";
 
 	buffer_append_c (output, c);
-	lexer_advance (self);
 	return NULL;
 }
 
@@ -305,9 +277,9 @@ lexer_string (struct lexer *self, struct buffer *output) {
 	unsigned char c;
 	const char *e = NULL;
 	while (self->len) {
-		if ((c = lexer_advance (self)) == '\'')
+		if ((c = lexer_advance (self)) == LEXER_STRING_QUOTE)
 			return NULL;
-		if (c != '\\')
+		if (c != LEXER_ESCAPE)
 			buffer_append_c (output, c);
 		else if ((e = lexer_escape_sequence (self, output)))
 			return e;
@@ -315,10 +287,15 @@ lexer_string (struct lexer *self, struct buffer *output) {
 	return "premature end of string";
 }
 
+static enum token lexer_tokens[256] = {
+	['('] = T_LPAREN, [')'] = T_RPAREN, ['['] = T_LBRACKET, [']'] = T_RBRACKET,
+	['{'] = T_LBRACE, ['}'] = T_RBRACE, [';'] = T_NEWLINE, ['\n'] = T_NEWLINE,
+	['@'] = T_AT, [LEXER_STRING_QUOTE] = T_STRING,
+};
+
 static enum token
 lexer_next (struct lexer *self, const char **e) {
-	// Skip over any whitespace between tokens
-	while (self->len && lexer_is_ignored (*self->p))
+	while (self->len && lexer_is_whitespace (*self->p))
 		lexer_advance (self);
 	if (!self->len)
 		return T_ABORT;
@@ -326,36 +303,26 @@ lexer_next (struct lexer *self, const char **e) {
 	free (self->string.s);
 	self->string = (struct buffer) BUFFER_INITIALIZER;
 
-	switch (*self->p) {
-	case '(':   lexer_advance (self);  return T_LPAREN;
-	case ')':   lexer_advance (self);  return T_RPAREN;
-	case '[':   lexer_advance (self);  return T_LBRACKET;
-	case ']':   lexer_advance (self);  return T_RBRACKET;
-	case '{':   lexer_advance (self);  return T_LBRACE;
-	case '}':   lexer_advance (self);  return T_RBRACE;
-	case '\n':  lexer_advance (self);  return T_NEWLINE;
-	case ';':   lexer_advance (self);  return T_NEWLINE;
-	case '@':   lexer_advance (self);  return T_AT;
-
-	case '#':
-		// Comments go until newline
+	unsigned char c = lexer_advance (self);
+	if (c == LEXER_COMMENT) {
 		while (self->len)
 			if (lexer_advance (self) == '\n')
 				return T_NEWLINE;
 		return T_ABORT;
-
-	case '\'':
-		lexer_advance (self);
-		if ((*e = lexer_string (self, &self->string)))
-			return T_ABORT;
-		return T_STRING;
 	}
 
-	assert (lexer_is_word_char (*self->p));
-	do
-		buffer_append_c (&self->string, lexer_advance (self));
-	while (lexer_is_word_char (*self->p));
-	return T_STRING;
+	enum token token = lexer_tokens[c];
+	if (!token) {
+		buffer_append_c (&self->string, c);
+		while (self->len && !lexer_is_whitespace (*self->p)
+			&& !lexer_tokens[(unsigned char) *self->p])
+			buffer_append_c (&self->string, lexer_advance (self));
+		return T_STRING;
+	}
+	if (token == T_STRING
+	 && (*e = lexer_string (self, &self->string)))
+		return T_ABORT;
+	return token;
 }
 
 static char *lexer_errorf (struct lexer *self, const char *fmt, ...)
@@ -371,7 +338,7 @@ lexer_errorf (struct lexer *self, const char *fmt, ...) {
 	if (!description)
 		return NULL;
 
-	char *e = format ("near line %u, column %u: %s",
+	char *e = format ("at or before line %u, column %u: %s",
 		self->line + 1, self->column + 1, description);
 	free (description);
 	return e;
