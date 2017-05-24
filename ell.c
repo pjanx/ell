@@ -211,7 +211,6 @@ struct lexer {
 	struct buffer string;               ///< Parsed string value
 };
 
-/// Input has to be null-terminated anyway
 static void
 lexer_init (struct lexer *self, const char *p, size_t len) {
 	*self = (struct lexer) { .p = (const unsigned char *) p, .len = len };
@@ -886,8 +885,7 @@ new_number (double n) {
 
 static bool
 truthy (struct item *item) {
-	return item
-		&& ((item->type == ITEM_STRING && item->len != 0) || item->head);
+	return item && (item->head || item->len);
 }
 
 static struct item * new_boolean (bool b) { return new_string ("1", b); }
