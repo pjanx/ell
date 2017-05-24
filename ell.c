@@ -205,7 +205,7 @@ static const char *token_names[] = {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 struct lexer {
-	const char *p;                      ///< Current position in input
+	const unsigned char *p;             ///< Current position in input
 	size_t len;                         ///< How many bytes of input are left
 	unsigned line, column;              ///< Current line and column
 	struct buffer string;               ///< Parsed string value
@@ -214,7 +214,7 @@ struct lexer {
 /// Input has to be null-terminated anyway
 static void
 lexer_init (struct lexer *self, const char *p, size_t len) {
-	*self = (struct lexer) { .p = p, .len = len };
+	*self = (struct lexer) { .p = (const unsigned char *) p, .len = len };
 }
 
 static void
@@ -259,7 +259,7 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output) {
 	if (!self->len)
 		return "premature end of escape sequence";
 
-	unsigned char c = lexer_advance (self);
+	int c = lexer_advance (self);
 	if (c == 'x') {
 		if (lexer_hexa_escape (self, output))
 			return NULL;
@@ -274,7 +274,7 @@ lexer_escape_sequence (struct lexer *self, struct buffer *output) {
 
 static const char *
 lexer_string (struct lexer *self, struct buffer *output) {
-	unsigned char c;
+	int c;
 	const char *e = NULL;
 	while (self->len) {
 		if ((c = lexer_advance (self)) == LEXER_STRING_QUOTE)
@@ -303,7 +303,7 @@ lexer_next (struct lexer *self, const char **e) {
 	free (self->string.s);
 	self->string = (struct buffer) BUFFER_INITIALIZER;
 
-	unsigned char c = lexer_advance (self);
+	int c = lexer_advance (self);
 	if (c == LEXER_COMMENT) {
 		while (self->len)
 			if (lexer_advance (self) == '\n')
@@ -315,7 +315,7 @@ lexer_next (struct lexer *self, const char **e) {
 	if (!token) {
 		buffer_append_c (&self->string, c);
 		while (self->len && !lexer_is_whitespace (*self->p)
-			&& !lexer_tokens[(unsigned char) *self->p])
+			&& !lexer_tokens[*self->p])
 			buffer_append_c (&self->string, lexer_advance (self));
 		return T_STRING;
 	}
