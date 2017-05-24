@@ -69,8 +69,7 @@ format (const char *format, ...) {
 
 struct buffer {
 	char *s;                            ///< Buffer data
-	size_t alloc;                       ///< Number of bytes allocated
-	size_t len;                         ///< Number of bytes used
+	size_t alloc, len;                  ///< Number of bytes allocated and used
 	bool memory_failure;                ///< Memory allocation failed
 };
 
@@ -101,7 +100,7 @@ buffer_append_c (struct buffer *self, char c) {
 	return buffer_append (self, &c, 1);
 }
 
-// --- Data types --------------------------------------------------------------
+// --- Data items --------------------------------------------------------------
 
 enum item_type { ITEM_STRING, ITEM_LIST };
 
@@ -110,28 +109,16 @@ struct item {
 	struct item *next;                  ///< Next item on the list/stack
 
 	struct item *head;                  ///< The head of the list
-	size_t len;                         ///< Length of the string (sans '\0')
+	size_t len;                         ///< Length of "value" (sans '\0')
 	char value[];                       ///< The null-terminated string value
 };
-
-const char *
-item_type_to_str (enum item_type type) {
-	switch (type) {
-	case ITEM_STRING: return "string";
-	case ITEM_LIST:   return "list";
-	}
-	abort ();
-}
-
-// --- Item management ---------------------------------------------------------
 
 static void item_free_list (struct item *);
 static struct item *new_clone_list (const struct item *);
 
 static void
 item_free (struct item *item) {
-	if (item->type == ITEM_LIST)
-		item_free_list (item->head);
+	item_free_list (item->head);
 	free (item);
 }
 
@@ -146,20 +133,15 @@ item_free_list (struct item *item) {
 
 static struct item *
 new_clone (const struct item *item) {
-	size_t size = sizeof *item + 1;
-	if (item->type == ITEM_STRING)
-		size += item->len;
-
+	size_t size = sizeof *item + item->len + 1;
 	struct item *clone = malloc (size);
 	if (!clone)
 		return NULL;
 
 	memcpy (clone, item, size);
-	if (item->type == ITEM_LIST && clone->head) {
-		if (!(clone->head = new_clone_list (clone->head))) {
-			free (clone);
-			return NULL;
-		}
+	if (clone->head && !(clone->head = new_clone_list (clone->head))) {
+		free (clone);
+		return NULL;
 	}
 	clone->next = NULL;
 	return clone;
@@ -187,7 +169,6 @@ new_string (const char *s, size_t len) {
 	item->type = ITEM_STRING;
 	item->len = len;
 	memcpy (item->value, s, len);
-	item->value[len] = '\0';
 	return item;
 }
 
