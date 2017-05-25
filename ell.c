@@ -852,6 +852,13 @@ set_single_argument (struct context *ctx, struct item *item) {
 	return true;
 }
 
+static bool
+execute_any (struct context *ctx, struct item *body, struct item **result) {
+	if (body->type == ITEM_STRING)
+		return check (ctx, (*result = new_clone (body)));
+	return execute (ctx, body->head, result);
+}
+
 static struct item *
 new_number (double n) {
 	char *s;
@@ -911,12 +918,12 @@ defn (fn_if) {
 			return set_error (ctx, "missing body");
 
 		struct item *res = NULL;
-		if (!execute_statement (ctx, cond, &res))
+		if (!execute_any (ctx, cond, &res))
 			return false;
 		bool match = truthy (res);
 		item_free_list (res);
 		if (match)
-			return execute_statement (ctx, body, result);
+			return execute_any (ctx, body, result);
 
 		if (!(keyword = body->next))
 			break;
@@ -926,7 +933,7 @@ defn (fn_if) {
 		if (!strcmp (keyword->value, "else")) {
 			if (!(body = keyword->next))
 				return set_error (ctx, "missing body");
-			return execute_statement (ctx, body, result);
+			return execute_any (ctx, body, result);
 		}
 		if (strcmp (keyword->value, "elif"))
 			return set_error (ctx, "invalid keyword: %s", keyword->value);
@@ -935,8 +942,8 @@ defn (fn_if) {
 }
 
 defn (fn_map) {
-	struct item *body = args, *values;
-	if (!body || body->type != ITEM_LIST)
+	struct item *body, *values;
+	if (!(body = args))
 		return set_error (ctx, "first argument must be a function");
 	if (!(values = body->next) || values->type != ITEM_LIST)
 		return set_error (ctx, "second argument must be a list");
@@ -944,7 +951,7 @@ defn (fn_map) {
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
 		if (!set_single_argument (ctx, v)
-		 || !execute (ctx, body->head, out)) {
+		 || !execute_any (ctx, body, out)) {
 			item_free_list (res);
 			return false;
 		}
@@ -1008,12 +1015,12 @@ defn (fn_parse) {
 }
 
 defn (fn_try) {
-	struct item *body = args, *handler;
-	if (!body || body->type != ITEM_LIST)
+	struct item *body, *handler;
+	if (!(body = args))
 		return set_error (ctx, "first argument must be a function");
-	if (!(handler = body->next) || handler->type != ITEM_LIST)
+	if (!(handler = body->next))
 		return set_error (ctx, "second argument must be a function");
-	if (execute (ctx, body->head, result))
+	if (execute_any (ctx, body, result))
 		return true;
 
 	struct item *message;
@@ -1025,7 +1032,7 @@ defn (fn_try) {
 	item_free_list (*result); *result = NULL;
 
 	bool ok = set_single_argument (ctx, message)
-		&& execute (ctx, handler->head, result);
+		&& execute_any (ctx, handler, result);
 	item_free (message);
 	return ok;
 }
