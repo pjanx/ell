@@ -343,43 +343,111 @@ lexer_errorf (struct lexer *self, const char *fmt, ...) {
 	return e;
 }
 
-// --- Parsing -----------------------------------------------------------------
+// --- Printing ----------------------------------------------------------------
 
-static void
-print_string (const char *s) {
-	putc ('\'', stdout);
-	for (; *s; s++)
-		if      (*s == '\n') printf ("\\n");
-		else if (*s == '\\') putc ('\\', stdout);
-		else                 putc (*s, stdout);
-	putc ('\'', stdout);
+static void print_item_list (struct item *item);
+
+static bool
+print_string_needs_quoting (struct item *s) {
+	for (size_t i = 0; i < s->len; i++) {
+		unsigned char c = s->value[i];
+		if (lexer_is_whitespace (c) || lexer_tokens[c]
+		 || c == LEXER_ESCAPE || c < 32)
+			return true;
+	}
+	return s->len == 0;
+}
+
+static bool
+print_string (struct item *s) {
+	if (s->type != ITEM_STRING)
+		return false;
+	if (!print_string_needs_quoting (s)) {
+		printf ("%s", s->value);
+		return true;
+	}
+
+	putchar (LEXER_STRING_QUOTE);
+	for (size_t i = 0; i < s->len; i++) {
+		unsigned char c = s->value[i];
+		if (c < 32)
+			printf ("\\x%02x", c);
+		else if (c == LEXER_ESCAPE || c == LEXER_STRING_QUOTE)
+			printf ("\\%c", c);
+		else
+			putchar (c);
+	}
+	putchar (LEXER_STRING_QUOTE);
+	return true;
+}
+
+static bool
+print_block (struct item *list) {
+	if (!list->head || strcmp (list->head->value, "quote")
+	 || !list->head->next || list->head->next->next
+	 || list->head->next->type != ITEM_LIST)
+		return false;
+
+	list = list->head->next->head;
+	for (struct item *line = list; line; line = line->next)
+		if (line->type != ITEM_LIST)
+			return false;
+
+	putchar ('{');
+	for (struct item *line = list; line; line = line->next) {
+		putchar (' ');
+		print_item_list (line->head);
+		putchar (line->next ? ';' : ' ');
+	}
+	putchar ('}');
+	return true;
+}
+
+static bool
+print_set (struct item *list) {
+	if (!list->head || strcmp (list->head->value, "set")
+	 || !list->head->next || list->head->next->next)
+		return false;
+
+	putchar ('@');
+	print_item_list (list->head->next);
+	return true;
+}
+
+static bool
+print_list (struct item *list) {
+	if (!list->head || strcmp (list->head->value, "list"))
+		return false;
+
+	putchar ('[');
+	print_item_list (list->head->next);
+	putchar (']');
+	return true;
 }
 
 static void
-print_tree (struct item *tree, int level) {
-	// TODO: also re-add syntax sugar
-	for (struct item *iter = tree; iter; iter = iter->next) {
-		if (iter != tree)
-			printf ("%*s", level, "");
-		if (iter->type == ITEM_STRING) {
-			print_string (iter->value);
-		} else if (iter->head
-			&& iter->head->type == ITEM_STRING
-			&& !strcmp (iter->head->value, "list")) {
-			printf ("[");
-			print_tree (iter->head->next, level + 1);
-			printf ("]");
-		} else {
-			printf ("(");
-			print_tree (iter->head, level + 1);
-			printf (")");
-		}
-		if (iter->next)
-			printf ("\n");
+print_item (struct item *item) {
+	if (print_string (item)
+	 || print_block (item)
+	 || print_set (item)
+	 || print_list (item))
+		return;
+
+	putchar ('(');
+	print_item_list (item->head);
+	putchar (')');
+}
+
+static void
+print_item_list (struct item *item) {
+	for (; item; item = item->next) {
+		print_item (item);
+		if (item->next)
+			putchar (' ');
 	}
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// --- Parsing -----------------------------------------------------------------
 
 struct parser {
 	struct lexer lexer;                 ///< Tokenizer
@@ -965,9 +1033,8 @@ defn (fn_print) {
 	(void) result;
 	for (; args; args = args->next) {
 		if (args->type != ITEM_STRING)
-			// TODO: print lists as their parsable representation
-			return set_error (ctx, "cannot print lists");
-		if (fwrite (args->value, 1, args->len, stdout) != args->len)
+			print_item (args);
+		else if (fwrite (args->value, 1, args->len, stdout) != args->len)
 			return set_error (ctx, "write failed: %s", strerror (errno));
 	}
 	return true;

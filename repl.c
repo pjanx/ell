@@ -36,7 +36,7 @@ run (struct context *ctx, struct item *program) {
 		ctx->error = NULL;
 		ctx->memory_failure = false;
 	} else {
-		print_tree (result, 0);
+		print_item_list (result);
 		putchar ('\n');
 		item_free_list (result);
 	}

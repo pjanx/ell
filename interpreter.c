@@ -38,11 +38,6 @@ main (int argc, char *argv[]) {
 	parser_init (&parser, buf.s, buf.len - 1);
 	const char *e = NULL;
 	struct item *program = parser_run (&parser, &e);
-#ifndef NDEBUG
-	printf ("\x1b[1m%s\x1b[0m\n", buf.s);
-	print_tree (program, 0);
-	printf ("\n\n");
-#endif
 	free (buf.s);
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
