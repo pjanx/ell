@@ -1029,6 +1029,21 @@ defn (fn_system) {
 	return check (ctx, (*result = new_number (system (command->value))));
 }
 
+defn (fn_parse) {
+	struct item *body = args;
+	if (!body || body->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+
+	struct parser parser;
+	parser_init (&parser, args->value, args->len);
+	const char *e = NULL;
+	bool ok = check (ctx, (*result = new_list (parser_run (&parser, &e))));
+	if (e)
+		ok = set_error (ctx, "%s", e);
+	parser_free (&parser);
+	return ok;
+}
+
 defn (fn_plus) {
 	double res = 0.0;
 	for (; args; args = args->next) {
@@ -1205,6 +1220,7 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "print",  fn_print)
 		&& native_register (ctx, "..",     fn_concatenate)
 		&& native_register (ctx, "system", fn_system)
+		&& native_register (ctx, "parse",  fn_parse)
 		&& native_register (ctx, "+",      fn_plus)
 		&& native_register (ctx, "-",      fn_minus)
 		&& native_register (ctx, "*",      fn_multiply)
