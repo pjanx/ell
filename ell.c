@@ -898,6 +898,7 @@ defn (fn_set) {
 	struct item *value;
 	if ((value = name->next))
 		return check (ctx, (value = new_clone (value)))
+			&& check (ctx, (*result = new_clone (value)))
 			&& set (ctx, name->value, value);
 
 	// We return an empty list for a nil value
