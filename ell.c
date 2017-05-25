@@ -1044,6 +1044,38 @@ defn (fn_parse) {
 	return ok;
 }
 
+defn (fn_try) {
+	struct item *body = args, *handler;
+	if (!body || body->type != ITEM_LIST)
+		return set_error (ctx, "first argument must be a function");
+	if (!(handler = body->next) || handler->type != ITEM_LIST)
+		return set_error (ctx, "second argument must be a function");
+	if (execute (ctx, body->head, result))
+		return true;
+
+	struct item *message;
+	if (ctx->memory_failure
+	 || !check (ctx, (message = new_string (ctx->error, strlen (ctx->error)))))
+		return false;
+
+	free (ctx->error); ctx->error = NULL;
+	item_free_list (*result); *result = NULL;
+
+	bool ok = set_single_argument (ctx, message)
+		&& execute (ctx, handler->head, result);
+	item_free (message);
+	return ok;
+}
+
+defn (fn_throw) {
+	(void) result;
+
+	struct item *message = args;
+	if (!message || message->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	return set_error (ctx, message->value);
+}
+
 defn (fn_plus) {
 	double res = 0.0;
 	for (; args; args = args->next) {
@@ -1226,6 +1258,8 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "..",     fn_concatenate)
 		&& native_register (ctx, "system", fn_system)
 		&& native_register (ctx, "parse",  fn_parse)
+		&& native_register (ctx, "try",    fn_try)
+		&& native_register (ctx, "throw",  fn_throw)
 		&& native_register (ctx, "+",      fn_plus)
 		&& native_register (ctx, "-",      fn_minus)
 		&& native_register (ctx, "*",      fn_multiply)
