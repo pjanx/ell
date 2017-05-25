@@ -852,18 +852,6 @@ set_single_argument (struct context *ctx, struct item *item) {
 	return true;
 }
 
-#define E_BREAK "_break"
-
-static bool
-eat_error (struct context *ctx, const char *name) {
-	if (!ctx->error || strcmp (ctx->error, name))
-		return false;
-
-	free (ctx->error);
-	ctx->error = NULL;
-	return true;
-}
-
 static struct item *
 new_number (double n) {
 	char *s;
@@ -944,31 +932,6 @@ defn (fn_if) {
 			return set_error (ctx, "invalid keyword: %s", keyword->value);
 	}
 	return true;
-}
-
-defn (fn_for) {
-	struct item *list = args, *body;
-	if (!list || list->type != ITEM_LIST)
-		return set_error (ctx, "first argument must be a list");
-	if (!(body = list->next) || body->type != ITEM_LIST)
-		return set_error (ctx, "second argument must be a function");
-
-	(void) result;
-	for (struct item *v = list->head; v; v = v->next) {
-		struct item *res = NULL;
-		bool ok = set_single_argument (ctx, v)
-			&& execute (ctx, body->head, &res);
-		item_free_list (res);
-		if (eat_error (ctx, E_BREAK))
-			break;
-		if (!ok)
-			return false;
-	}
-	return true;
-}
-
-defn (fn_break) {
-	(void) args; (void) result; return set_error (ctx, E_BREAK);
 }
 
 defn (fn_map) {
@@ -1214,8 +1177,12 @@ init_runtime_library (struct context *ctx) {
 		const char *definition;         ///< The defining script
 	} functions[] = {
 		{ "unless", "arg _cond _body; if (not (@_cond)) @_body"      },
-		{ "filter", "arg _body _list; map {"
-		  "arg _item; if (@_body @_item) { @_item } } @_list"        },
+		{ "filter", "arg _body _list;"
+		  "map { arg _i; if (@_body @_i) { @_i } } @_list"           },
+		{ "for",    "arg _list _body;"
+		  "try { map {arg _i; @_body @_i } @_list"
+		  "} { arg _e; if (ne? @_e _break) { throw @e } }"           },
+		{ "break",  "throw _break"                                   },
 		// TODO: we should be able to apply them to all arguments
 		{ "ne?",    "arg _ne1 _ne2; not (eq? @_ne1 @_ne2)"           },
 		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2)"           },
@@ -1251,8 +1218,6 @@ init_runtime_library (struct context *ctx) {
 		&& native_register (ctx, "set",    fn_set)
 		&& native_register (ctx, "list",   fn_list)
 		&& native_register (ctx, "if",     fn_if)
-		&& native_register (ctx, "for",    fn_for)
-		&& native_register (ctx, "break",  fn_break)
 		&& native_register (ctx, "map",    fn_map)
 		&& native_register (ctx, "print",  fn_print)
 		&& native_register (ctx, "..",     fn_concatenate)

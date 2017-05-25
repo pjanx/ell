@@ -2,10 +2,18 @@ set greet {
 	arg _name
 	print 'hello ' @_name '\n'
 }
+set decr {
+	arg _name
+	set @_name (- @@_name 1)
+}
+
+set limit 2
 for (map { arg _x; .. @_x ! } [
 	world
 	creator
+	'darkness, my old friend'
 ]) {
 	arg _whom
 	greet @_whom
+	if (= 0 (decr limit)) { break }
 }
