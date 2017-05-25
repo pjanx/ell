@@ -1244,70 +1244,59 @@ defn (fn_less) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+const char init_program[] =
+	"set unless { arg _cond _body; if (not (@_cond)) @_body }\n"
+	"set filter { arg _body _list\n"
+	"    map { arg _i; if (@_body @_i) { @_i } } @_list }\n"
+	"set for { arg _list _body\n"
+	"    try { map { arg _i; @_body @_i } @_list } {\n"
+	"        arg _e; if (ne? @_e _break) { throw @e } } }\n"
+	"set break { throw _break }\n"
+
+	// TODO: we should be able to apply them to all arguments
+	"set ne? { arg _ne1 _ne2; not (eq? @_ne1 @_ne2) }\n"
+	"set ge? { arg _ge1 _ge2; not (lt? @_ge1 @_ge2) }\n"
+	"set le? { arg _le1 _le2; ge? @_le2 @_le1       }\n"
+	"set gt? { arg _gt1 _gt2; lt? @_gt2 @_gt1       }\n"
+	"set <>  { arg _<>1 _<>2; not (= @_<>1 @_<>2)   }\n"
+	"set >=  { arg _>=1 _>=2; not (< @_>=1 @_>=2)   }\n"
+	"set <=  { arg _<=1 _<=2; >= @_<=2 @_<=1        }\n"
+	"set >   { arg _>1  _>2;  <  @_>2  @_>1         }\n";
+
 static bool
 init_runtime_library (struct context *ctx) {
-	struct {
-		const char *name;               ///< Name of the function
-		const char *definition;         ///< The defining script
-	} functions[] = {
-		{ "unless", "arg _cond _body; if (not (@_cond)) @_body"      },
-		{ "filter", "arg _body _list;"
-		  "map { arg _i; if (@_body @_i) { @_i } } @_list"           },
-		{ "for",    "arg _list _body;"
-		  "try { map {arg _i; @_body @_i } @_list"
-		  "} { arg _e; if (ne? @_e _break) { throw @e } }"           },
-		{ "break",  "throw _break"                                   },
-		// TODO: we should be able to apply them to all arguments
-		{ "ne?",    "arg _ne1 _ne2; not (eq? @_ne1 @_ne2)"           },
-		{ "ge?",    "arg _ge1 _ge2; not (lt? @_ge1 @_ge2)"           },
-		{ "le?",    "arg _le1 _le2; ge? @_le2 @_le1"                 },
-		{ "gt?",    "arg _gt1 _gt2; lt? @_gt2 @_gt1"                 },
-		{ "<>",     "arg _<>1 _<>2; not (= @_<>1 @_<>2)"             },
-		{ ">=",     "arg _>=1 _>=2; not (< @_>=1 @_>=2)"             },
-		{ "<=",     "arg _<=1 _<=2; >= @_<=2 @_<=1"                  },
-		{ ">",      "arg _>1  _>2;  <  @_>2  @_>1"                   },
-	};
+	if (!native_register (ctx, "set",    fn_set)
+	 || !native_register (ctx, "list",   fn_list)
+	 || !native_register (ctx, "if",     fn_if)
+	 || !native_register (ctx, "map",    fn_map)
+	 || !native_register (ctx, "print",  fn_print)
+	 || !native_register (ctx, "..",     fn_concatenate)
+	 || !native_register (ctx, "system", fn_system)
+	 || !native_register (ctx, "parse",  fn_parse)
+	 || !native_register (ctx, "try",    fn_try)
+	 || !native_register (ctx, "throw",  fn_throw)
+	 || !native_register (ctx, "+",      fn_plus)
+	 || !native_register (ctx, "-",      fn_minus)
+	 || !native_register (ctx, "*",      fn_multiply)
+	 || !native_register (ctx, "/",      fn_divide)
+	 || !native_register (ctx, "not",    fn_not)
+	 || !native_register (ctx, "and",    fn_and)
+	 || !native_register (ctx, "or",     fn_or)
+	 || !native_register (ctx, "eq?",    fn_eq)
+	 || !native_register (ctx, "lt?",    fn_lt)
+	 || !native_register (ctx, "=",      fn_equals)
+	 || !native_register (ctx, "<",      fn_less))
+		return false;
 
-	bool ok = true;
-	for (size_t i = 0; i < N_ELEMENTS (functions); i++) {
-		struct parser parser;
-		parser_init (&parser,
-			functions[i].definition, strlen (functions[i].definition));
-		const char *e = NULL;
-		struct item *body = parser_run (&parser, &e);
-		if (e) {
-			printf ("error parsing internal function `%s': %s\n",
-				functions[i].name, e);
-			ok = false;
-		} else if (!check (ctx, (body = new_list (body)))
-			|| !set (ctx, functions[i].name, body)) {
-			ok = false;
-		} else
-			body = NULL;
-		item_free_list (body);
-		parser_free (&parser);
-	}
+	struct parser parser;
+	parser_init (&parser, init_program, sizeof init_program);
 
-	return ok
-		&& native_register (ctx, "set",    fn_set)
-		&& native_register (ctx, "list",   fn_list)
-		&& native_register (ctx, "if",     fn_if)
-		&& native_register (ctx, "map",    fn_map)
-		&& native_register (ctx, "print",  fn_print)
-		&& native_register (ctx, "..",     fn_concatenate)
-		&& native_register (ctx, "system", fn_system)
-		&& native_register (ctx, "parse",  fn_parse)
-		&& native_register (ctx, "try",    fn_try)
-		&& native_register (ctx, "throw",  fn_throw)
-		&& native_register (ctx, "+",      fn_plus)
-		&& native_register (ctx, "-",      fn_minus)
-		&& native_register (ctx, "*",      fn_multiply)
-		&& native_register (ctx, "/",      fn_divide)
-		&& native_register (ctx, "not",    fn_not)
-		&& native_register (ctx, "and",    fn_and)
-		&& native_register (ctx, "or",     fn_or)
-		&& native_register (ctx, "eq?",    fn_eq)
-		&& native_register (ctx, "lt?",    fn_lt)
-		&& native_register (ctx, "=",      fn_equals)
-		&& native_register (ctx, "<",      fn_less);
+	const char *e = NULL;
+	struct item *result = NULL;
+	struct item *program = parser_run (&parser, &e);
+	bool ok = !e && execute (ctx, program, &result);
+	parser_free (&parser);
+	item_free_list (program);
+	item_free_list (result);
+	return ok;
 }
