@@ -792,9 +792,9 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 	if (!evaluated)
 		return true;
 
-	bool success = execute_resolved (ctx, evaluated, args, result);
+	bool ok = execute_resolved (ctx, evaluated, args, result);
 	item_free_list (evaluated);
-	return success;
+	return ok;
 }
 
 static bool

@@ -53,6 +53,9 @@ struct context ctx;
 
 static char **
 complete (const char *text, int start, int end) {
+	(void) start;
+	(void) end;
+
 	// Don't iterate over filenames and stuff
 	rl_attempted_completion_over = true;
 
