@@ -977,6 +977,10 @@ defn (fn_list) {
 	return check (ctx, (*result = new_list (values)));
 }
 
+defn (fn_values) {
+	return !args || check (ctx, (*result = new_clone_list (args)));
+}
+
 defn (fn_if) {
 	struct item *cond, *body, *keyword;
 	for (cond = args; ; cond = keyword->next) {
@@ -1280,6 +1284,7 @@ static bool
 init_runtime_library (struct context *ctx) {
 	if (!native_register (ctx, "set",    fn_set)
 	 || !native_register (ctx, "list",   fn_list)
+	 || !native_register (ctx, "values", fn_values)
 	 || !native_register (ctx, "if",     fn_if)
 	 || !native_register (ctx, "map",    fn_map)
 	 || !native_register (ctx, "print",  fn_print)
