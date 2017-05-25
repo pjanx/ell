@@ -1055,7 +1055,12 @@ defn (fn_plus) {
 }
 
 defn (fn_minus) {
-	double res = 0.0;
+	if (!args || args->type != ITEM_STRING)
+		return set_error (ctx, "first argument must be string");
+	double res = strtod (args->value, NULL);
+	if (!(args = args->next))
+		res = -res;
+
 	for (; args; args = args->next) {
 		if (args->type != ITEM_STRING)
 			return set_error (ctx, "arguments must be strings");
