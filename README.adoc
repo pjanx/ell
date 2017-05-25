@@ -10,7 +10,9 @@ reasonably comfortable to use.
 This package is an implementation of said language, meant to be self-contained,
 portable and reusable.  Performance is specifically not an intent.
 
-The project is currently in a "working proof of concept" stage.
+The project is currently in a "proof of concept" stage with many useful data
+operations missing but I believe it won't be a problem to implement them as
+needed for anyone interested.
 
 Syntax
 ------
@@ -45,6 +47,8 @@ which gets expanded to the following:
 Observe that the whole program is enclosed in an implicit pair of `{}` and that
 `quote` is a very powerful special form which can replace many others if needed.
 
+For a slightly more realistic example have a look at 'greet.ell'.
+
 Runtime
 -------
 All variables are put in a single global namespace with no further scoping.
@@ -59,13 +63,14 @@ The last expression in a block is the return value.
 
 Special Forms
 -------------
-`quote <arg>`
+`quote [<arg>]...`
 
-Returns the first argument.
+Returns the arguments without any evaluation.
 
-`arg <name>...`
+`arg [<name>]...`
 
 Assigns arguments to the current call in order to given names.
+Names for which there are no values left are set to `[]`.
 
 Standard library
 ----------------
@@ -112,6 +117,18 @@ Print all items in sequence--strings directly, lists as source code.
 
 Run a system command and return its return value.
 
+`parse <program>`
+
+Parse a program into a list of lists.
+
+`try <body> <handler>`
+
+Execute the body and pass any error to the handler instead of propagating it.
+
+`throw <message>`
+
+Throw an error.  Messages starting on an underscore don't generate backtraces.
+
 `+`, `-`, `*`, `/`
 
 Arithmetic operations on floating point numbers.
@@ -135,6 +152,13 @@ Install development packages for GNU Readline to get a REPL for toying around:
 
  $ make repl
  $ ./repl
+
+Possible Ways of Complicating
+-----------------------------
+ * variable scoping: the simplest is to set values in the nearest scope they
+   can be found in but make `arg` an exception to that, just like in AWK
+ * reference counting: currently all values are always copied as needed, which
+   is good enough for all imaginable use cases, simpler and less error-prone
 
 Contributing and Support
 ------------------------
