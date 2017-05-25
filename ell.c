@@ -575,9 +575,7 @@ struct context {
 	struct item *arguments;             ///< Arguments to last executed block
 
 	char *error;                        ///< Error information
-	bool error_is_fatal;                ///< Whether the error can be catched
 	bool memory_failure;                ///< Memory allocation failure
-
 	void *user_data;                    ///< User data
 };
 
