@@ -129,6 +129,14 @@ Execute the body and pass any error to the handler instead of propagating it.
 
 Throw an error.  Messages starting on an underscore don't generate backtraces.
 
+`not <value>`
+
+Return a boolean with the opposite truthiness.
+
+`and [<body>]...`, `or [<body>]...`
+
+Short-circuit evaluation, trying to return whatever the bodies result in.
+
 `+`, `-`, `*`, `/`
 
 Arithmetic operations on floating point numbers.

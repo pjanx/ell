@@ -839,7 +839,7 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 	struct item *args = body->next;
 	if (body->type == ITEM_STRING) {
 		const char *name = body->value;
-		// TODO: these could be just regular handlers, only top priority
+		// These could be just regular handlers, only top priority
 		if (!strcmp (name, "quote"))
 			return !args || check (ctx, (*result = new_clone_list (args)));
 		if (!strcmp (name, "arg"))
@@ -1168,19 +1168,32 @@ defn (fn_not) {
 	return check (ctx, (*result = new_boolean (!truthy (args))));
 }
 
-// TODO: "and" and "or" should be short-circuiting special forms
 defn (fn_and) {
-	bool res = true;
-	for (; args; args = args->next)
-		 res &= truthy (args);
-	return check (ctx, (*result = new_boolean (res)));
+	if (!args)
+		return check (ctx, (*result = new_boolean (true)));
+	for (; args; args = args->next) {
+		item_free_list (*result);
+		*result = NULL;
+
+		if (!execute_any (ctx, args, result))
+			return false;
+		if (!truthy (*result))
+			return check (ctx, (*result = new_boolean (false)));
+	}
+	return true;
 }
 
 defn (fn_or) {
-	bool res = false;
-	for (; args; args = args->next)
-		 res |= truthy (args);
-	return check (ctx, (*result = new_boolean (res)));
+	for (; args; args = args->next) {
+		if (!execute_any (ctx, args, result))
+			return false;
+		if (truthy (*result))
+			return true;
+
+		item_free_list (*result);
+		*result = NULL;
+	}
+	return check (ctx, (*result = new_boolean (false)));
 }
 
 defn (fn_eq) {
