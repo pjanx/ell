@@ -47,7 +47,7 @@ which gets expanded to the following:
 Observe that the whole program is enclosed in an implicit pair of `{}` and that
 `quote` is a very powerful special form which can replace many others if needed.
 
-For a slightly more realistic example have a look at 'greet.ell'.
+For a slightly more realistic example you can have a look at 'greet.ell'.
 
 Runtime
 -------
@@ -102,7 +102,7 @@ Abort the running loop.
 
 `map <list> <body>`
 
-Transform each element with the given function.
+Transform each element with the given function into any number of values.
 
 `filter <list> <body>`
 
@@ -130,7 +130,8 @@ Execute the body and pass any error to the handler instead of propagating it.
 
 `throw <message>`
 
-Throw an error.  Messages starting on an underscore don't generate backtraces.
+Throw an error.  Messages starting on an underscore don't generate backtraces
+which can be used to catch them.
 
 `not <value>`
 
