@@ -51,10 +51,9 @@ For a slightly more realistic example have a look at 'greet.ell'.
 
 Runtime
 -------
-All variables are put in a single global namespace with no further scoping.
-Arguments to a block (which is a list of lists) must be assigned to variables
-first using the `arg` special form, and that must happen before they get
-overriden by execution of a different block.
+Variables use per-block dynamic scoping.  Arguments to a block (which is a list
+of lists) must be assigned to variables first using the `arg` special form, and
+that must happen before they get overriden by execution of a different block.
 
 When evaluating a command, the first argument is typically a string with its
 name and it is resolved as if `set` was called on it.
@@ -69,8 +68,9 @@ Returns the arguments without any evaluation.
 
 `arg [<name>]...`
 
-Assigns arguments to the current call in order to given names.
-Names for which there are no values left are set to `[]`.
+Assigns arguments to the current block in order to given names.  Names for which
+there are no values left default to `[]`.  This form can effectively be used to
+declare local variables.
 
 Standard library
 ----------------
@@ -167,12 +167,6 @@ Install development packages for GNU Readline to get a REPL for toying around:
 
 Possible Ways of Complicating
 -----------------------------
- * variable scoping: lexical scoping is deemed too complex.  The simplest is to
-   look up and set values in the nearest dynamic scope they can be found in,
-   or globally if not found, and have `arg` create the scopes, which also makes
-   AWK-style local variables work.  A convention of starting locally bound names
-   with an underscore can keep the global namespace always accessible, and even
-   overridable if needed.
  * reference counting: currently all values are always copied as needed, which
    is good enough for all imaginable use cases, simpler and less error-prone
 

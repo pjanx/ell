@@ -61,7 +61,7 @@ complete (const char *text, int start, int end) {
 
 	static char *buf[128];
 	size_t n = 1, len = strlen (text);
-	for (struct item *item = ctx.variables; item; item = item->next)
+	for (struct item *item = ctx.globals; item; item = item->next)
 		if (n < 127 && !strncmp (item->head->value, text, len))
 			buf[n++] = format ("%s", item->head->value);
 	for (struct native_fn *iter = ctx.native; iter; iter = iter->next)

@@ -638,7 +638,8 @@ parser_run (struct parser *self, const char **e) {
 // --- Runtime -----------------------------------------------------------------
 
 struct context {
-	struct item *variables;             ///< List of variables
+	struct item *globals;               ///< List of global variables
+	struct item *scopes;                ///< Dynamic scopes from newest
 	struct native_fn *native;           ///< Maps strings to C functions
 	struct item *arguments;             ///< Arguments to last executed block
 
@@ -667,7 +668,8 @@ context_free (struct context *ctx) {
 		next = iter->next;
 		free (iter);
 	}
-	item_free_list (ctx->variables);
+	item_free_list (ctx->globals);
+	item_free_list (ctx->scopes);
 	item_free_list (ctx->arguments);
 	free (ctx->error);
 }
@@ -677,27 +679,17 @@ check (struct context *ctx, struct item *item) {
 	return !(ctx->memory_failure |= !item);
 }
 
-static struct item *
-get (struct context *ctx, const char *name) {
-	for (struct item *iter = ctx->variables; iter; iter = iter->next)
-		if (!strcmp (iter->head->value, name))
-			return iter->head->next;
+static struct item **
+scope_find (struct item **scope, const char *name) {
+	for (; *scope; scope = &(*scope)->next)
+		if (!strcmp ((*scope)->head->value, name))
+			return scope;
 	return NULL;
 }
 
 static bool
-set (struct context *ctx, const char *name, struct item *value) {
-	struct item **p;
-	for (p = &ctx->variables; *p; p = &(*p)->next)
-		if (!strcmp ((*p)->head->value, name)) {
-			struct item *tmp = *p;
-			*p = (*p)->next;
-			item_free (tmp);
-			break;
-		}
-	if (!value)
-		return true;
-
+scope_prepend (struct context *ctx, struct item **scope,
+	const char *name, struct item *value) {
 	struct item *key, *pair;
 	if (!check (ctx, (key = new_string (name, strlen (name))))
 	 || !check (ctx, (pair = new_list (key)))) {
@@ -705,9 +697,41 @@ set (struct context *ctx, const char *name, struct item *value) {
 		return false;
 	}
 	key->next = value;
-	pair->next = ctx->variables;
-	ctx->variables = pair;
+	pair->next = *scope;
+	*scope = pair;
 	return true;
+}
+
+static struct item *
+get (struct context *ctx, const char *name) {
+	struct item **item;
+	for (struct item *scope = ctx->scopes; scope; scope = scope->next)
+		if ((item = scope_find (&scope->head, name)))
+			return (*item)->head->next;
+	if (!(item = scope_find (&ctx->globals, name)))
+		return NULL;
+	return (*item)->head->next;
+}
+
+static bool
+set (struct context *ctx, const char *name, struct item *value) {
+	struct item **item;
+	for (struct item *scope = ctx->scopes; scope; scope = scope->next) {
+		if ((item = scope_find (&scope->head, name))) {
+			item_free_list ((*item)->head->next);
+			(*item)->head->next = NULL;
+			return !value
+				|| check (ctx, ((*item)->head->next = new_clone (value)));
+		}
+	}
+
+	// Variables only get deleted by "arg" or from the global scope
+	if ((item = scope_find (&ctx->globals, name))) {
+		struct item *tmp = *item;
+		*item = (*item)->next;
+		item_free (tmp);
+	}
+	return !value || scope_prepend (ctx, &ctx->globals, name, value);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -757,6 +781,10 @@ can_modify_error (struct context *ctx) {
 
 static bool
 assign_arguments (struct context *ctx, struct item *names) {
+	struct item **scope = &ctx->scopes->head;
+	item_free_list (*scope);
+	*scope = NULL;
+
 	struct item *arg = ctx->arguments;
 	for (; names; names = names->next) {
 		if (names->type != ITEM_STRING)
@@ -765,7 +793,8 @@ assign_arguments (struct context *ctx, struct item *names) {
 		struct item *value = NULL;
 		if (arg && !check (ctx, (value = new_clone (arg))))
 			return false;
-		if (!set (ctx, names->value, value))
+		// Duplicates don't really matter to us, user's problem
+		if (!scope_prepend (ctx, scope, names->value, value))
 			return false;
 		if (arg)
 			arg = arg->next;
@@ -893,16 +922,27 @@ execute_statement
 	return false;
 }
 
-// Execute a block and return whatever the last statement returned
+/// Execute a block and return whatever the last statement returned
 static bool
 execute (struct context *ctx, struct item *body, struct item **result) {
+	struct item *scope;
+	if (!check (ctx, (scope = new_list (NULL))))
+		return false;
+
+	scope->next = ctx->scopes;
+	ctx->scopes = scope;
+
+	bool ok = true;
 	for (; body; body = body->next) {
 		item_free_list (*result);
 		*result = NULL;
-		if (!execute_statement (ctx, body, result))
-			return false;
+
+		if (!(ok = execute_statement (ctx, body, result)))
+			break;
 	}
-	return true;
+	ctx->scopes = scope->next;
+	item_free (scope);
+	return ok;
 }
 
 // --- Runtime library ---------------------------------------------------------
@@ -1269,14 +1309,14 @@ const char init_program[] =
 	"set break { throw _break }\n"
 
 	// TODO: we should be able to apply them to all arguments
-	"set ne? { arg _ne1 _ne2; not (eq? @_ne1 @_ne2) }\n"
-	"set ge? { arg _ge1 _ge2; not (lt? @_ge1 @_ge2) }\n"
-	"set le? { arg _le1 _le2; ge? @_le2 @_le1       }\n"
-	"set gt? { arg _gt1 _gt2; lt? @_gt2 @_gt1       }\n"
-	"set <>  { arg _<>1 _<>2; not (= @_<>1 @_<>2)   }\n"
-	"set >=  { arg _>=1 _>=2; not (< @_>=1 @_>=2)   }\n"
-	"set <=  { arg _<=1 _<=2; >= @_<=2 @_<=1        }\n"
-	"set >   { arg _>1  _>2;  <  @_>2  @_>1         }\n";
+	"set ne? { arg _1 _2; not (eq? @_1 @_2) }\n"
+	"set ge? { arg _1 _2; not (lt? @_1 @_2) }\n"
+	"set le? { arg _1 _2; ge? @_2 @_1       }\n"
+	"set gt? { arg _1 _2; lt? @_2 @_1       }\n"
+	"set <>  { arg _1 _2; not (= @_1 @_2)   }\n"
+	"set >=  { arg _1 _2; not (< @_1 @_2)   }\n"
+	"set <=  { arg _1 _2; >= @_2 @_1        }\n"
+	"set >   { arg _1 _2; <  @_2 @_1        }\n";
 
 static bool
 init_runtime_library (struct context *ctx) {
