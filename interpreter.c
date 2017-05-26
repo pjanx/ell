@@ -50,9 +50,13 @@ main (int argc, char *argv[]) {
 	if (!init_runtime_library (&ctx))
 		printf ("%s\n", "runtime library initialization failed");
 
+	// In this one place we optimistically expect allocation to succeed
+	struct item *args = NULL, **tail = &args;
+	for (int i = 2; i < argc; i++)
+		tail = &(*tail = new_string (argv[i], strlen (argv[i])))->next;
+
 	struct item *result = NULL;
-	// TODO: pass argv as the list of arguments
-	(void) execute_block (&ctx, program, NULL, &result);
+	(void) execute_block (&ctx, program, args, &result);
 	item_free_list (result);
 	item_free_list (program);
 
