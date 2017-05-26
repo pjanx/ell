@@ -167,8 +167,12 @@ Install development packages for GNU Readline to get a REPL for toying around:
 
 Possible Ways of Complicating
 -----------------------------
- * variable scoping: the simplest is to set values in the nearest scope they
-   can be found in but make `arg` an exception to that, just like in AWK
+ * variable scoping: lexical scoping is deemed too complex.  The simplest is to
+   look up and set values in the nearest dynamic scope they can be found in,
+   or globally if not found, and have `arg` create the scopes, which also makes
+   AWK-style local variables work.  A convention of starting locally bound names
+   with an underscore can keep the global namespace always accessible, and even
+   overridable if needed.
  * reference counting: currently all values are always copied as needed, which
    is good enough for all imaginable use cases, simpler and less error-prone
 
