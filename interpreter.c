@@ -51,7 +51,8 @@ main (int argc, char *argv[]) {
 		printf ("%s\n", "runtime library initialization failed");
 
 	struct item *result = NULL;
-	(void) execute (&ctx, program, &result);
+	// TODO: pass argv as the list of arguments
+	(void) execute_block (&ctx, program, NULL, &result);
 	item_free_list (result);
 	item_free_list (program);
 

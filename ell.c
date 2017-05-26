@@ -641,7 +641,6 @@ struct context {
 	struct item *globals;               ///< List of global variables
 	struct item *scopes;                ///< Dynamic scopes from newest
 	struct native_fn *native;           ///< Maps strings to C functions
-	struct item *arguments;             ///< Arguments to last executed block
 
 	char *error;                        ///< Error information
 	bool memory_failure;                ///< Memory allocation failure
@@ -670,7 +669,6 @@ context_free (struct context *ctx) {
 	}
 	item_free_list (ctx->globals);
 	item_free_list (ctx->scopes);
-	item_free_list (ctx->arguments);
 	free (ctx->error);
 }
 
@@ -779,34 +777,12 @@ can_modify_error (struct context *ctx) {
 	return !ctx->memory_failure && ctx->error[0] != '_';
 }
 
-static bool
-assign_arguments (struct context *ctx, struct item *names) {
-	struct item **scope = &ctx->scopes->head;
-	item_free_list (*scope);
-	*scope = NULL;
-
-	struct item *arg = ctx->arguments;
-	for (; names; names = names->next) {
-		if (names->type != ITEM_STRING)
-			return set_error (ctx, "argument names must be strings");
-
-		struct item *value = NULL;
-		if (arg && !check (ctx, (value = new_clone (arg))))
-			return false;
-		// Duplicates don't really matter to us, user's problem
-		if (!scope_prepend (ctx, scope, names->value, value))
-			return false;
-		if (arg)
-			arg = arg->next;
-	}
-	return true;
-}
-
 static bool execute_statement (struct context *, struct item *, struct item **);
-static bool execute (struct context *ctx, struct item *body, struct item **);
+static bool execute_block (struct context *,
+	struct item *, struct item *, struct item **);
 
 static bool
-execute_args (struct context *ctx, struct item *args) {
+execute_args (struct context *ctx, struct item *args, struct item **result) {
 	size_t i = 0;
 	struct item *res = NULL, **out = &res;
 	for (; args; args = args->next) {
@@ -820,8 +796,7 @@ execute_args (struct context *ctx, struct item *args) {
 		out = &(*out = evaluated)->next;
 		i++;
 	}
-	item_free_list (ctx->arguments);
-	ctx->arguments = res;
+	*result = res;
 	return true;
 
 error:
@@ -842,14 +817,13 @@ execute_native (struct context *ctx, const char *name, struct item *args,
 	struct native_fn *fn = native_find (ctx, name);
 	if (!fn)
 		return set_error (ctx, "unknown function");
-	if (!execute_args (ctx, args))
+
+	struct item *arguments = NULL;
+	if (!execute_args (ctx, args, &arguments))
 		return false;
 
-	// "ctx->arguments" is for assign_arguments() only
-	args = ctx->arguments;
-	ctx->arguments = NULL;
-	bool ok = fn->handler (ctx, args, result);
-	item_free_list (args);
+	bool ok = fn->handler (ctx, arguments, result);
+	item_free_list (arguments);
 	return ok;
 }
 
@@ -859,8 +833,9 @@ execute_resolved (struct context *ctx, struct item *body, struct item *args,
 	// Resolving names ecursively could be pretty fatal, let's not do that
 	if (body->type == ITEM_STRING)
 		return check (ctx, (*result = new_clone (body)));
-	return execute_args (ctx, args)
-		&& execute (ctx, body->head, result);
+	struct item *arguments = NULL;
+	return execute_args (ctx, args, &arguments)
+		&& execute_block (ctx, body->head, arguments, result);
 }
 
 static bool
@@ -868,11 +843,8 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 	struct item *args = body->next;
 	if (body->type == ITEM_STRING) {
 		const char *name = body->value;
-		// These could be just regular handlers, only top priority
 		if (!strcmp (name, "quote"))
 			return !args || check (ctx, (*result = new_clone_list (args)));
-		if (!strcmp (name, "arg"))
-			return assign_arguments (ctx, args);
 		if ((body = get (ctx, name)))
 			return execute_resolved (ctx, body, args, result);
 		return execute_native (ctx, name, args, result);
@@ -922,12 +894,33 @@ execute_statement
 	return false;
 }
 
-/// Execute a block and return whatever the last statement returned
 static bool
-execute (struct context *ctx, struct item *body, struct item **result) {
-	struct item *scope;
-	if (!check (ctx, (scope = new_list (NULL))))
+args_to_scope (struct context *ctx, struct item *args, struct item **scope) {
+	if (!check (ctx, (args = new_list (args)))
+	 || !scope_prepend (ctx, scope, "*", args))
 		return false;
+
+	size_t i = 0;
+	for (args = args->head; args; args = args->next) {
+		char buf[16] = "";
+		(void) snprintf (buf, sizeof buf, "%zu", ++i);
+		struct item *copy = NULL;
+		if ((args && !check (ctx, (copy = new_clone (args))))
+		 || !scope_prepend (ctx, scope, buf, copy))
+			return false;
+	}
+	return check (ctx, (*scope = new_list (*scope)));
+}
+
+/// Execute a block and return whatever the last statement returned, eats args
+static bool
+execute_block (struct context *ctx, struct item *body, struct item *args,
+	struct item **result) {
+	struct item *scope = NULL;
+	if (!args_to_scope (ctx, args, &scope)) {
+		item_free_list (scope);
+		return false;
+	}
 
 	scope->next = ctx->scopes;
 	ctx->scopes = scope;
@@ -951,20 +944,13 @@ execute (struct context *ctx, struct item *body, struct item **result) {
 	(struct context *ctx, struct item *args, struct item **result)
 
 static bool
-set_single_argument (struct context *ctx, struct item *item) {
-	struct item *single;
-	if (!check (ctx, (single = new_clone (item))))
-		return false;
-	item_free_list (ctx->arguments);
-	ctx->arguments = single;
-	return true;
-}
-
-static bool
-execute_any (struct context *ctx, struct item *body, struct item **result) {
+execute_any (struct context *ctx, struct item *body, struct item *arg,
+	struct item **result) {
 	if (body->type == ITEM_STRING)
 		return check (ctx, (*result = new_clone (body)));
-	return execute (ctx, body->head, result);
+	if (arg && !check (ctx, (arg = new_clone (arg))))
+		return false;
+	return execute_block (ctx, body->head, arg, result);
 }
 
 static struct item *
@@ -992,6 +978,27 @@ truthy (struct item *item) {
 static struct item * new_boolean (bool b) { return new_string ("1", b); }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+defn (fn_local) {
+	struct item *names = args;
+	if (!names || names->type != ITEM_LIST)
+		return set_error (ctx, "first argument must be a list");
+
+	// Duplicates or non-strings don't really matter to us, user's problem
+	struct item **scope = &ctx->scopes->head;
+	(void) result;
+
+	struct item *values = names->next;
+	for (names = names->head; names; names = names->next) {
+		struct item *value = NULL;
+		if ((values && !check (ctx, (value = new_clone (values))))
+		 || !scope_prepend (ctx, scope, names->value, value))
+			return false;
+		if (values)
+			values = values->next;
+	}
+	return true;
+}
 
 defn (fn_set) {
 	struct item *name = args;
@@ -1030,12 +1037,12 @@ defn (fn_if) {
 			return set_error (ctx, "missing body");
 
 		struct item *res = NULL;
-		if (!execute_any (ctx, cond, &res))
+		if (!execute_any (ctx, cond, NULL, &res))
 			return false;
 		bool match = truthy (res);
 		item_free_list (res);
 		if (match)
-			return execute_any (ctx, body, result);
+			return execute_any (ctx, body, NULL, result);
 
 		if (!(keyword = body->next))
 			break;
@@ -1045,7 +1052,7 @@ defn (fn_if) {
 		if (!strcmp (keyword->value, "else")) {
 			if (!(body = keyword->next))
 				return set_error (ctx, "missing body");
-			return execute_any (ctx, body, result);
+			return execute_any (ctx, body, NULL, result);
 		}
 		if (strcmp (keyword->value, "elif"))
 			return set_error (ctx, "invalid keyword: %s", keyword->value);
@@ -1062,8 +1069,7 @@ defn (fn_map) {
 
 	struct item *res = NULL, **out = &res;
 	for (struct item *v = values->head; v; v = v->next) {
-		if (!set_single_argument (ctx, v)
-		 || !execute_any (ctx, body, out)) {
+		if (!execute_any (ctx, body, v, out)) {
 			item_free_list (res);
 			return false;
 		}
@@ -1129,7 +1135,7 @@ defn (fn_try) {
 		return set_error (ctx, "first argument must be a function");
 	if (!(handler = body->next))
 		return set_error (ctx, "second argument must be a function");
-	if (execute_any (ctx, body, result))
+	if (execute_any (ctx, body, NULL, result))
 		return true;
 
 	struct item *message;
@@ -1140,8 +1146,7 @@ defn (fn_try) {
 	free (ctx->error); ctx->error = NULL;
 	item_free_list (*result); *result = NULL;
 
-	bool ok = set_single_argument (ctx, message)
-		&& execute_any (ctx, handler, result);
+	bool ok = execute_any (ctx, handler, message, result);
 	item_free (message);
 	return ok;
 }
@@ -1217,7 +1222,7 @@ defn (fn_and) {
 		item_free_list (*result);
 		*result = NULL;
 
-		if (!execute_any (ctx, args, result))
+		if (!execute_any (ctx, args, NULL, result))
 			return false;
 		if (!truthy (*result))
 			return check (ctx, (*result = new_boolean (false)));
@@ -1227,7 +1232,7 @@ defn (fn_and) {
 
 defn (fn_or) {
 	for (; args; args = args->next) {
-		if (!execute_any (ctx, args, result))
+		if (!execute_any (ctx, args, NULL, result))
 			return false;
 		if (truthy (*result))
 			return true;
@@ -1300,27 +1305,24 @@ defn (fn_less) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 const char init_program[] =
-	"set unless { arg _cond _body; if (not (@_cond)) @_body }\n"
-	"set filter { arg _body _list\n"
-	"    map { arg _i; if (@_body @_i) { @_i } } @_list }\n"
-	"set for { arg _list _body\n"
-	"    try { map { arg _i; @_body @_i } @_list } {\n"
-	"        arg _e; if (ne? @_e _break) { throw @e } } }\n"
+	"set unless { if (not (@1)) @2 }\n"
+	"set filter { local [_body _list] @1 @2\n"
+	"    map { if (@_body @1) { @1 } } @_list }\n"
+	"set for { local [_list _body] @1 @2\n"
+	"    try { map { @_body @1 } @_list } {\n"
+	"        if (ne? @1 _break) { throw @1 } } }\n"
 	"set break { throw _break }\n"
 
 	// TODO: we should be able to apply them to all arguments
-	"set ne? { arg _1 _2; not (eq? @_1 @_2) }\n"
-	"set ge? { arg _1 _2; not (lt? @_1 @_2) }\n"
-	"set le? { arg _1 _2; ge? @_2 @_1       }\n"
-	"set gt? { arg _1 _2; lt? @_2 @_1       }\n"
-	"set <>  { arg _1 _2; not (= @_1 @_2)   }\n"
-	"set >=  { arg _1 _2; not (< @_1 @_2)   }\n"
-	"set <=  { arg _1 _2; >= @_2 @_1        }\n"
-	"set >   { arg _1 _2; <  @_2 @_1        }\n";
+	"set ne? { not (eq? @1 @2) }\n"  "set le? { ge? @2 @1 }\n"
+	"set ge? { not (lt? @1 @2) }\n"  "set gt? { lt? @2 @1 }\n"
+	"set <>  { not (= @1 @2)   }\n"  "set <=  { >= @2 @1  }\n"
+	"set >=  { not (< @1 @2)   }\n"  "set >   { <  @2 @1  }\n";
 
 static bool
 init_runtime_library (struct context *ctx) {
-	if (!native_register (ctx, "set",    fn_set)
+	if (!native_register (ctx, "local",  fn_local)
+	 || !native_register (ctx, "set",    fn_set)
 	 || !native_register (ctx, "list",   fn_list)
 	 || !native_register (ctx, "values", fn_values)
 	 || !native_register (ctx, "if",     fn_if)
@@ -1350,7 +1352,7 @@ init_runtime_library (struct context *ctx) {
 	const char *e = NULL;
 	struct item *result = NULL;
 	struct item *program = parser_run (&parser, &e);
-	bool ok = !e && execute (ctx, program, &result);
+	bool ok = !e && execute_block (ctx, program, NULL, &result);
 	parser_free (&parser);
 	item_free_list (program);
 	item_free_list (result);

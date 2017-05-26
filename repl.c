@@ -24,7 +24,7 @@
 static void
 run (struct context *ctx, struct item *program) {
 	struct item *result = NULL;
-	(void) execute (ctx, program, &result);
+	(void) execute_block (ctx, program, NULL, &result);
 	item_free_list (program);
 
 	const char *failure = ctx->error;
