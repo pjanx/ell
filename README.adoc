@@ -2,10 +2,9 @@ ell
 ===
 :compact-option:
 
-'ell' is a modified subset of Scheme with added syntax sugar, incorporating
-ideas from Perl, Tcl and Bourne shell.  The goal was to conceive a programming
-language implementable with as little code as possible while still being
-reasonably comfortable to use.
+'ell' is a middle ground between Scheme and Tcl.  The goal was to conceive
+a programming language implementable with as little code as possible while
+still being reasonably comfortable to use.
 
 This package is an implementation of said language, meant to be self-contained,
 portable and reusable.  Performance is specifically not an intent.
@@ -16,10 +15,10 @@ needed for anyone interested.
 
 Syntax
 ------
-Owing to its Scheme heritage, 'ell' is homoiconic, that is a program can be
-directly expressed using the language's data types.  There are only two of
-those: the list and the string.  Any numerical conversions are made on an
-as-needed basis.  Similarly, strings act like atoms/symbols when executed.
+Owing to its heritage, 'ell' is homoiconic, that is a program can be directly
+expressed using the language's data types.  There are only two of those:
+the list and the string.  Any numerical conversions are made on an as-needed
+basis.  Similarly, strings act like atoms/symbols when executed.
 
 The parser, however, does a bunch of transformations:
 
@@ -167,7 +166,9 @@ Install development packages for GNU Readline to get a REPL for toying around:
 
 Possible Ways of Complicating
 -----------------------------
- * `local [_a _b _rest] @*` would elegantly solve the problem of varargs
+ * `local [_a _b _rest] @*` would elegantly solve the problem of varargs,
+   that is, unpack a list when names are list, and make the last element a list
+   when there are more arguments than names
  * reference counting: currently all values are always copied as needed, which
    is good enough for all imaginable use cases, simpler and less error-prone
 
