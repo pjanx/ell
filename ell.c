@@ -897,7 +897,7 @@ execute_statement
 static bool
 args_to_scope (struct context *ctx, struct item *args, struct item **scope) {
 	if (!check (ctx, (args = new_list (args)))
-	 || !scope_prepend (ctx, scope, "*", args))
+	 || !scope_prepend (ctx, scope, "args", args))
 		return false;
 
 	size_t i = 0;

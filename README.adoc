@@ -52,7 +52,7 @@ Runtime
 -------
 Variables use per-block dynamic scoping.  Arguments to a block (which is a list
 of lists) are assigned to local variables named `1`, `2`, etc., and the full
-list of them is stored in `*`.
+list of them is stored in `args`.
 
 When evaluating a command, the first argument is typically a string with its
 name and it is resolved as if `set` was called on it.
@@ -166,7 +166,7 @@ Install development packages for GNU Readline to get a REPL for toying around:
 
 Possible Ways of Complicating
 -----------------------------
- * `local [_a _b _rest] @*` would elegantly solve the problem of varargs,
+ * `local [_a _b _rest] @args` would elegantly solve the problem of varargs,
    that is, unpack a list when names are list, and make the last element a list
    when there are more arguments than names
  * reference counting: currently all values are always copied as needed, which
