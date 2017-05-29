@@ -383,12 +383,10 @@ print_string (struct item *s) {
 
 static bool
 print_block (struct item *list) {
-	if (!list->head || strcmp (list->head->value, "quote")
-	 || !list->head->next || list->head->next->next
-	 || list->head->next->type != ITEM_LIST)
+	if (!list->head || strcmp (list->head->value, "block"))
 		return false;
 
-	list = list->head->next->head;
+	list = list->head->next;
 	for (struct item *line = list; line; line = line->next)
 		if (line->type != ITEM_LIST)
 			return false;
@@ -579,8 +577,7 @@ parse_item (struct parser *self, jmp_buf out) {
 		while ((*tail = parse_line (self, err)))
 			tail = &(*tail)->next;
 		EXPECT (T_RBRACE);
-		result = CHECK (new_list (result));
-		return CHECK (parse_prefix_list (result, "quote"));
+		return CHECK (parse_prefix_list (result, "block"));
 	}
 
 	self->memory_failure = !(self->error = lexer_errorf (&self->lexer,
@@ -843,8 +840,9 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 	struct item *args = body->next;
 	if (body->type == ITEM_STRING) {
 		const char *name = body->value;
-		if (!strcmp (name, "quote"))
-			return !args || check (ctx, (*result = new_clone_list (args)));
+		if (!strcmp (name, "block"))
+			return (!args || check (ctx, (args = new_clone_list (args))))
+				&& check (ctx, (*result = new_list (args)));
 		if ((body = get (ctx, name)))
 			return execute_resolved (ctx, body, args, result);
 		return execute_native (ctx, name, args, result);
@@ -857,7 +855,7 @@ execute_item (struct context *ctx, struct item *body, struct item **result) {
 		return false;
 
 	// It might a bit confusing that this doesn't evaluate arguments
-	// but neither does "quote" and there's nothing to do here
+	// but neither does "block" and there's nothing to do here
 	if (!evaluated)
 		return true;
 

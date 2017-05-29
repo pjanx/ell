@@ -25,8 +25,8 @@ The parser, however, does a bunch of transformations:
  * `[a b c]` makes a call to `(list a b c)`;
  * `@var` is a shorthand for `(set var)`;
  * `{ code }` is the most complex one.  Each line within the curly braces is
-   wrapped in parentheses, and the resulting list is quoted, so that it doesn't
-   execute immediately.
+   wrapped in parentheses, and the resulting sequence is wrapped in a quoted
+   list, so that it doesn't execute immediately.
 
 As an example, consider the following snippet:
 
@@ -38,13 +38,13 @@ As an example, consider the following snippet:
 
 which gets expanded to the following:
 
- ((print (if (quote ((eq? (set var) foo)))
-             (quote ((values 'Hello world\n')))
+ ((print (if (block (eq? (set var) foo))
+             (block (values 'Hello world\n'))
              else
-             (quote ((values 'Error\n'))))))
+             (block (values 'Error\n')))))
 
 Observe that the whole program is enclosed in an implicit pair of `{}` and that
-`quote` is a very powerful special form which can replace many others if needed.
+`block` is all that's left of special forms.
 
 For a slightly more realistic example you can have a look at 'greet.ell'.
 
@@ -55,20 +55,27 @@ of lists) are assigned to local variables named `1`, `2`, etc., and the full
 list of them is stored in `args`.
 
 When evaluating a command, the first argument is typically a string with its
-name and it is resolved as if `set` was called on it.
+name and it is resolved as if `set` was called on it.  Lists are left for
+execution as they are.
 
 The last expression in a block is the return value.
 
 Special Forms
 -------------
-`quote [<arg>]...`
+`block [<arg>]...`
 
-Like `values` but returns the arguments without any evaluation.
+Like `list` but doesn't evaluate arguments.  A more appropriate name might be
+`quoted-list`, which is not as descriptive in terms of syntax.  If simple
+quoting is desired, the list can be unpacked by an ordinary command.
 
-Standard library
+Standard Library
 ----------------
 The standard library interprets the empty list and the empty string as false
-values, everything else is taken as true.
+values, everything else is considered true.  Numbers are floating point with
+double precision, trailing zeroes are truncated.
+
+Where a `<body>` is expected, strings retain their value, and block evaluation
+is postponed as necessary.
 
 `local <names> [<value>]...`
 
@@ -89,7 +96,7 @@ Return an arbitrary number of values.
 
 `if <cond> <body> [elif <cond> <body>]... [else <body>]`
 
-Conditional evaluation, strings evaluate to themselves.
+Conditional evaluation.
 
 `for <list> <body>`
 
@@ -129,7 +136,7 @@ Execute the body and pass any error to the handler instead of propagating it.
 
 `throw <message>`
 
-Throw an error.  Messages starting on an underscore don't generate backtraces
+Throw an error.  Messages starting on an underscore don't generate backtraces,
 which can be used to catch them.
 
 `not <value>`
