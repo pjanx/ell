@@ -28,44 +28,44 @@ main (int argc, char *argv[]) {
 	}
 
 	int c;
-	struct buffer buf = BUFFER_INITIALIZER;
+	struct ell_buffer buf = ELL_BUFFER_INITIALIZER;
 	while ((c = fgetc (fp)) != EOF)
-		buffer_append_c (&buf, c);
-	buffer_append_c (&buf, 0);
+		ell_buffer_append_c (&buf, c);
+	ell_buffer_append_c (&buf, 0);
 	fclose (fp);
 
-	struct parser parser;
-	parser_init (&parser, buf.s, buf.len - 1);
+	struct ell_parser p;
+	ell_parser_init (&p, buf.s, buf.len - 1);
 	const char *e = NULL;
-	struct item *program = parser_run (&parser, &e);
+	struct ell_v *program = ell_parser_run (&p, &e);
 	free (buf.s);
 	if (e) {
 		printf ("%s: %s\n", "parse error", e);
 		return 1;
 	}
-	parser_free (&parser);
+	ell_parser_free (&p);
 
-	struct context ctx;
-	context_init (&ctx);
-	if (!init_runtime_library (&ctx))
+	struct ell ell;
+	ell_init (&ell);
+	if (!ell_std_initialize (&ell))
 		printf ("%s\n", "runtime library initialization failed");
 
 	// In this one place we optimistically expect allocation to succeed
-	struct item *args = NULL, **tail = &args;
+	struct ell_v *args = NULL, **tail = &args;
 	for (int i = 2; i < argc; i++)
-		tail = &(*tail = new_string (argv[i], strlen (argv[i])))->next;
+		tail = &(*tail = ell_string (argv[i], strlen (argv[i])))->next;
 
-	struct item *result = NULL;
-	(void) execute_block (&ctx, program, args, &result);
-	item_free_list (result);
-	item_free_list (program);
+	struct ell_v *result = NULL;
+	(void) ell_eval_block (&ell, program, args, &result);
+	ell_free_seq (result);
+	ell_free_seq (program);
 
-	const char *failure = ctx.error;
-	if (ctx.memory_failure)
+	const char *failure = ell.error;
+	if (ell.memory_failure)
 		failure = "memory allocation failure";
 	if (failure)
 		printf ("%s: %s\n", "runtime error", failure);
-	context_free (&ctx);
+	ell_free (&ell);
 	return 0;
 }
 

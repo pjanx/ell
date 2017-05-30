@@ -22,23 +22,23 @@
 #include <readline/history.h>
 
 static void
-run (struct context *ctx, struct item *program) {
-	struct item *result = NULL;
-	(void) execute_block (ctx, program, NULL, &result);
-	item_free_list (program);
+run (struct ell *ell, struct ell_v *program) {
+	struct ell_v *result = NULL;
+	(void) ell_eval_block (ell, program, NULL, &result);
+	ell_free_seq (program);
 
-	const char *failure = ctx->error;
-	if (ctx->memory_failure)
+	const char *failure = ell->error;
+	if (ell->memory_failure)
 		failure = "memory allocation failure";
 	if (failure) {
 		printf ("\x1b[31m%s: %s\x1b[0m\n", "runtime error", failure);
-		free (ctx->error);
-		ctx->error = NULL;
-		ctx->memory_failure = false;
+		free (ell->error);
+		ell->error = NULL;
+		ell->memory_failure = false;
 	} else {
-		print_item_list (result);
+		ell_print_seq (result);
 		putchar ('\n');
-		item_free_list (result);
+		ell_free_seq (result);
 	}
 }
 
@@ -49,7 +49,7 @@ init_readline (void) {
 	return 0;
 }
 
-struct context ctx;
+static struct ell ell;
 
 static char **
 complete (const char *text, int start, int end) {
@@ -61,18 +61,18 @@ complete (const char *text, int start, int end) {
 
 	static char *buf[128];
 	size_t n = 1, len = strlen (text);
-	for (struct item *item = ctx.globals; item; item = item->next)
-		if (n < 127 && !strncmp (item->head->value, text, len))
-			buf[n++] = format ("%s", item->head->value);
-	for (struct native_fn *iter = ctx.native; iter; iter = iter->next)
+	for (struct ell_v *v = ell.globals; v; v = v->next)
+		if (n < 127 && !strncmp (v->head->string, text, len))
+			buf[n++] = ell_format ("%s", v->head->string);
+	for (struct ell_native_fn *iter = ell.native; iter; iter = iter->next)
 		if (n < 127 && !strncmp (iter->name, text, len))
-			buf[n++] = format ("%s", iter->name);
+			buf[n++] = ell_format ("%s", iter->name);
 	if (n < 2)
 		return NULL;
 
 	// This never actually completes anything, just shows the options,
 	// we'd have to figure out the longest common prefix
-	buf[0] = format ("%s", text);
+	buf[0] = ell_format ("%s", text);
 
 	buf[n++] = NULL;
 	char **copy = malloc (sizeof *buf * n);
@@ -84,8 +84,8 @@ int
 main (int argc, char *argv[]) {
 	(void) argc;
 
-	context_init (&ctx);
-	if (!init_runtime_library (&ctx))
+	ell_init (&ell);
+	if (!ell_std_initialize (&ell))
 		printf ("%s\n", "runtime library initialization failed");
 
 	using_history ();
@@ -96,21 +96,21 @@ main (int argc, char *argv[]) {
 
 	char *line;
 	while ((line = readline ("> "))) {
-		struct parser parser;
-		parser_init (&parser, line, strlen (line));
+		struct ell_parser p;
+		ell_parser_init (&p, line, strlen (line));
 		add_history (line);
 
 		const char *e = NULL;
-		struct item *program = parser_run (&parser, &e);
+		struct ell_v *program = ell_parser_run (&p, &e);
 		free (line);
 		if (e)
 			printf ("\x1b[31m%s: %s\x1b[0m\n", "parse error", e);
 		else
-			run (&ctx, program);
-		parser_free (&parser);
+			run (&ell, program);
+		ell_parser_free (&p);
 	}
 
 	putchar ('\n');
-	context_free (&ctx);
+	ell_free (&ell);
 	return 0;
 }
