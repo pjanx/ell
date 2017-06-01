@@ -253,7 +253,7 @@ enum {
 };
 
 static bool ell_lexer_is_whitespace (int c) {
-	return !c || c == ' ' || c == '\t';
+	return !c || c == ' ' || c == '\t' || c == '\r';
 }
 
 static unsigned char ell_lexer_escapes[256] = {
