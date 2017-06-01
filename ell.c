@@ -356,7 +356,12 @@ ell_lexer_errorf (struct ell_lexer *self, const char *fmt, ...) {
 
 // --- Printing ----------------------------------------------------------------
 
-static void ell_print_seq (struct ell_v *v);
+// This can be wrapped inside a larger structure, and errors simply accumulated
+struct ell_printer {
+	void (*putchar) (struct ell_printer *self, unsigned char c);
+};
+
+static void ell_print_seq (struct ell_printer *printer, struct ell_v *v);
 
 static bool
 ell_print_string_needs_quoting (struct ell_v *s) {
@@ -370,30 +375,35 @@ ell_print_string_needs_quoting (struct ell_v *s) {
 }
 
 static bool
-ell_print_string (struct ell_v *s) {
+ell_print_string (struct ell_printer *printer, struct ell_v *s) {
 	if (s->type != ELL_STRING)
 		return false;
 	if (!ell_print_string_needs_quoting (s)) {
-		printf ("%s", s->string);
+		for (size_t i = 0; i < s->len; i++)
+			printer->putchar (printer, s->string[i]);
 		return true;
 	}
 
-	putchar (ELL_LEXER_STRING_QUOTE);
+	printer->putchar (printer, ELL_LEXER_STRING_QUOTE);
 	for (size_t i = 0; i < s->len; i++) {
 		unsigned char c = s->string[i];
-		if (c < 32)
-			printf ("\\x%02x", c);
-		else if (c == ELL_LEXER_ESCAPE || c == ELL_LEXER_STRING_QUOTE)
-			printf ("\\%c", c);
-		else
-			putchar (c);
+		if (c < 32) {
+			printer->putchar (printer, '\\');
+			printer->putchar (printer, 'x');
+			printer->putchar (printer, "0123456789abcdef"[c >> 4]);
+			printer->putchar (printer, "0123456789abcdef"[c & 15]);
+		} else if (c == ELL_LEXER_ESCAPE || c == ELL_LEXER_STRING_QUOTE) {
+			printer->putchar (printer, '\\');
+			printer->putchar (printer, c);
+		} else
+			printer->putchar (printer, c);
 	}
-	putchar (ELL_LEXER_STRING_QUOTE);
+	printer->putchar (printer, ELL_LEXER_STRING_QUOTE);
 	return true;
 }
 
 static bool
-ell_print_block (struct ell_v *list) {
+ell_print_block (struct ell_printer *printer, struct ell_v *list) {
 	if (!list->head || strcmp (list->head->string, "block"))
 		return false;
 
@@ -402,57 +412,57 @@ ell_print_block (struct ell_v *list) {
 		if (line->type != ELL_LIST)
 			return false;
 
-	putchar ('{');
+	printer->putchar (printer, '{');
 	for (struct ell_v *line = list; line; line = line->next) {
-		putchar (' ');
-		ell_print_seq (line->head);
-		putchar (line->next ? ';' : ' ');
+		printer->putchar (printer, ' ');
+		ell_print_seq (printer, line->head);
+		printer->putchar (printer, line->next ? ';' : ' ');
 	}
-	putchar ('}');
+	printer->putchar (printer, '}');
 	return true;
 }
 
 static bool
-ell_print_set (struct ell_v *list) {
+ell_print_set (struct ell_printer *printer, struct ell_v *list) {
 	if (!list->head || strcmp (list->head->string, "set")
 	 || !list->head->next || list->head->next->next)
 		return false;
 
-	putchar ('@');
-	ell_print_seq (list->head->next);
+	printer->putchar (printer, '@');
+	ell_print_seq (printer, list->head->next);
 	return true;
 }
 
 static bool
-ell_print_list (struct ell_v *list) {
+ell_print_list (struct ell_printer *printer, struct ell_v *list) {
 	if (!list->head || strcmp (list->head->string, "list"))
 		return false;
 
-	putchar ('[');
-	ell_print_seq (list->head->next);
-	putchar (']');
+	printer->putchar (printer, '[');
+	ell_print_seq (printer, list->head->next);
+	printer->putchar (printer, ']');
 	return true;
 }
 
 static void
-ell_print_v (struct ell_v *v) {
-	if (ell_print_string (v)
-	 || ell_print_block (v)
-	 || ell_print_set (v)
-	 || ell_print_list (v))
+ell_print_v (struct ell_printer *printer, struct ell_v *v) {
+	if (ell_print_string (printer, v)
+	 || ell_print_block (printer, v)
+	 || ell_print_set (printer, v)
+	 || ell_print_list (printer, v))
 		return;
 
-	putchar ('(');
-	ell_print_seq (v->head);
-	putchar (')');
+	printer->putchar (printer, '(');
+	ell_print_seq (printer, v->head);
+	printer->putchar (printer, ')');
 }
 
 static void
-ell_print_seq (struct ell_v *v) {
+ell_print_seq (struct ell_printer *printer, struct ell_v *v) {
 	for (; v; v = v->next) {
-		ell_print_v (v);
+		ell_print_v (printer, v);
 		if (v->next)
-			putchar (' ');
+			printer->putchar (printer, ' ');
 	}
 }
 
@@ -984,6 +994,27 @@ static struct ell_v * ell_boolean (bool b) { return ell_string ("1", b); }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+static void
+ell_stdout_printer_putchar (struct ell_printer *self, unsigned char c) {
+	(void) self;
+	(void) putchar (c);
+}
+
+static struct ell_printer ell_stdout_printer = { ell_stdout_printer_putchar };
+
+struct ell_buffer_printer {
+	struct ell_printer super;           ///< Superclass
+	struct ell_buffer *output;          ///< Where to append the result to
+};
+
+static void
+ell_buffer_printer_putchar (struct ell_printer *printer, unsigned char c) {
+	struct ell_buffer_printer *self = (struct ell_buffer_printer *) printer;
+	ell_buffer_append_c (self->output, c);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 ell_defn (ell_fn_local) {
 	struct ell_v *names = args;
 	if (!names || names->type != ELL_LIST)
@@ -1088,7 +1119,7 @@ ell_defn (ell_fn_print) {
 	(void) result;
 	for (; args; args = args->next) {
 		if (args->type != ELL_STRING)
-			ell_print_v (args);
+			ell_print_v (&ell_stdout_printer, args);
 		else if (fwrite (args->string, 1, args->len, stdout) != args->len)
 			return ell_error (ell, "write failed: %s", strerror (errno));
 	}
@@ -1097,12 +1128,12 @@ ell_defn (ell_fn_print) {
 
 ell_defn (ell_fn_cat) {
 	struct ell_buffer buf = ELL_BUFFER_INITIALIZER;
+	struct ell_buffer_printer bp = { { ell_buffer_printer_putchar }, &buf };
 	for (; args; args = args->next) {
-		if (args->type != ELL_STRING) {
-			free (buf.s);
-			return ell_error (ell, "cannot concatenate lists");
-		}
-		ell_buffer_append (&buf, args->string, args->len);
+		if (args->type != ELL_STRING)
+			ell_print_v (&bp.super, args);
+		else
+			ell_buffer_append (&buf, args->string, args->len);
 	}
 	bool ok = !(ell->memory_failure |= buf.memory_failure)
 		&& ell_check (ell, (*result = ell_string (buf.s, buf.len)));

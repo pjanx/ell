@@ -36,7 +36,7 @@ run (struct ell *ell, struct ell_v *program) {
 		ell->error = NULL;
 		ell->memory_failure = false;
 	} else {
-		ell_print_seq (result);
+		ell_print_seq (&ell_stdout_printer, result);
 		putchar ('\n');
 		ell_free_seq (result);
 	}
