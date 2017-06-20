@@ -1,3 +1,4 @@
+# Decrement variable passed by name
 set decr {
 	set @1 (- @@1 1)
 }
