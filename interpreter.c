@@ -28,14 +28,13 @@ main (int argc, char *argv[]) {
 	}
 
 	int c;
-	struct ell_buffer buf = ELL_BUFFER_INITIALIZER;
+	struct ell_buffer buf = ell_buffer_make ();
 	while ((c = fgetc (fp)) != EOF)
 		ell_buffer_append_c (&buf, c);
 	ell_buffer_append_c (&buf, 0);
 	fclose (fp);
 
-	struct ell_parser p;
-	ell_parser_init (&p, buf.s, buf.len - 1);
+	struct ell_parser p = ell_parser_make (buf.s, buf.len - 1);
 	const char *e = NULL;
 	struct ell_v *program = ell_parser_run (&p, &e);
 	free (buf.s);
@@ -45,8 +44,7 @@ main (int argc, char *argv[]) {
 	}
 	ell_parser_free (&p);
 
-	struct ell ell;
-	ell_init (&ell);
+	struct ell ell = ell_make ();
 	if (!ell_std_initialize (&ell))
 		printf ("%s\n", "runtime library initialization failed");
 

@@ -84,7 +84,7 @@ int
 main (int argc, char *argv[]) {
 	(void) argc;
 
-	ell_init (&ell);
+	ell = ell_make ();
 	if (!ell_std_initialize (&ell))
 		printf ("%s\n", "runtime library initialization failed");
 
@@ -96,8 +96,7 @@ main (int argc, char *argv[]) {
 
 	char *line;
 	while ((line = readline ("> "))) {
-		struct ell_parser p;
-		ell_parser_init (&p, line, strlen (line));
+		struct ell_parser p = ell_parser_make (line, strlen (line));
 		add_history (line);
 
 		const char *e = NULL;

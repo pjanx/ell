@@ -72,7 +72,10 @@ struct ell_buffer {
 	bool memory_failure;                ///< Memory allocation failed
 };
 
-#define ELL_BUFFER_INITIALIZER { NULL, 0, 0, false }
+static struct ell_buffer
+ell_buffer_make (void) {
+	return (struct ell_buffer) { NULL, 0, 0, false };
+}
 
 static bool
 ell_buffer_append (struct ell_buffer *self, const void *s, size_t n) {
@@ -212,9 +215,9 @@ struct ell_lexer {
 	struct ell_buffer string;           ///< Parsed string value
 };
 
-static void
-ell_lexer_init (struct ell_lexer *self, const char *p, size_t len) {
-	*self = (struct ell_lexer) { .p = (const unsigned char *) p, .len = len };
+static struct ell_lexer
+ell_lexer_make (const char *p, size_t len) {
+	return (struct ell_lexer) { .p = (const unsigned char *) p, .len = len };
 }
 
 static void
@@ -311,7 +314,7 @@ ell_lexer_next (struct ell_lexer *self, const char **e) {
 		return ELLT_ABORT;
 
 	free (self->string.s);
-	self->string = (struct ell_buffer) ELL_BUFFER_INITIALIZER;
+	self->string = ell_buffer_make ();
 
 	int c = ell_lexer_advance (self);
 	if (c == ELL_LEXER_COMMENT) {
@@ -476,14 +479,14 @@ struct ell_parser {
 	bool memory_failure;                ///< Memory allocation failed
 };
 
-static void
-ell_parser_init (struct ell_parser *p, const char *script, size_t len) {
-	memset (p, 0, sizeof *p);
-	ell_lexer_init (&p->lexer, script, len);
-
+static struct ell_parser
+ell_parser_make (const char *script, size_t len) {
 	// As reading in tokens may cause exceptions, we wait for the first peek()
 	// to replace the initial ELLT_ABORT.
-	p->replace_token = true;
+	return (struct ell_parser) {
+		.lexer = ell_lexer_make (script, len),
+		.replace_token = true,
+	};
 }
 
 static void
@@ -673,10 +676,7 @@ struct ell_native_fn {
 	char name[];                        ///< The name of the function
 };
 
-static void
-ell_init (struct ell *ell) {
-	memset (ell, 0, sizeof *ell);
-}
+static struct ell ell_make (void) { return (struct ell) {}; }
 
 static void
 ell_free (struct ell *ell) {
@@ -990,7 +990,7 @@ ell_number (double n) {
 }
 
 static bool ell_truthy (struct ell_v *v) { return v && (v->head || v->len); }
-static struct ell_v * ell_boolean (bool b) { return ell_string ("1", b); }
+static struct ell_v *ell_boolean (bool b) { return ell_string ("1", b); }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -1127,7 +1127,7 @@ ell_defn (ell_fn_print) {
 }
 
 ell_defn (ell_fn_cat) {
-	struct ell_buffer buf = ELL_BUFFER_INITIALIZER;
+	struct ell_buffer buf = ell_buffer_make ();
 	struct ell_buffer_printer bp = { { ell_buffer_printer_putchar }, &buf };
 	for (; args; args = args->next) {
 		if (args->type != ELL_STRING)
@@ -1155,8 +1155,7 @@ ell_defn (ell_fn_parse) {
 	if (!body || body->type != ELL_STRING)
 		return ell_error (ell, "first argument must be string");
 
-	struct ell_parser p;
-	ell_parser_init (&p, args->string, args->len);
+	struct ell_parser p = ell_parser_make (args->string, args->len);
 	const char *e = NULL;
 	bool ok = ell_check (ell, (*result = ell_list (ell_parser_run (&p, &e))));
 	if (e)
@@ -1392,8 +1391,8 @@ ell_std_initialize (struct ell *ell) {
 			return false;
 	}
 
-	struct ell_parser p;
-	ell_parser_init (&p, ell_std_composed, sizeof ell_std_composed);
+	struct ell_parser p =
+		ell_parser_make (ell_std_composed, sizeof ell_std_composed);
 
 	const char *e = NULL;
 	struct ell_v *result = NULL;
