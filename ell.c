@@ -847,7 +847,7 @@ ell_eval_native (struct ell *ell, const char *name, struct ell_v *args,
 static bool
 ell_eval_resolved (struct ell *ell, struct ell_v *body, struct ell_v *args,
 	struct ell_v **result) {
-	// Resolving names ecursively could be pretty fatal, let's not do that
+	// Resolving names recursively could be pretty fatal, let's not do that
 	if (body->type == ELL_STRING)
 		return ell_check (ell, (*result = ell_clone (body)));
 	struct ell_v *arguments = NULL;
