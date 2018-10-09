@@ -614,16 +614,6 @@ func (ell *Ell) Set(name string, v *V) {
 	scopePrepend(&ell.Globals, name, v)
 }
 
-// NativeFind returns the handler for a native function or nil.
-func (ell *Ell) NativeFind(name string) Handler {
-	return ell.Native[name]
-}
-
-// NativeRegister registers a native Go function handler.
-func (ell *Ell) NativeRegister(name string, handler Handler) {
-	ell.Native[name] = handler
-}
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // Errorf sets an error message in the interpreter context and returns false.
@@ -669,7 +659,7 @@ error:
 }
 
 func (ell *Ell) evalNative(name string, args *V, result **V) bool {
-	fn := ell.NativeFind(name)
+	fn := ell.Native[name]
 	if fn == nil {
 		return ell.Errorf("unknown function")
 	}
@@ -1280,7 +1270,7 @@ set >=  { not (< @1 @2)   }; set >   { <  @2 @1  }`
 // StdInitialize initializes the ell standard library.
 func StdInitialize(ell *Ell) bool {
 	for name, handler := range stdNative {
-		ell.NativeRegister(name, handler)
+		ell.Native[name] = handler
 	}
 
 	p := NewParser([]byte(stdComposed))
