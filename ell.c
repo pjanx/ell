@@ -734,9 +734,8 @@ ell_set (struct ell *ell, const char *name, struct ell_v *v) {
 	for (struct ell_v *scope = ell->scopes; scope; scope = scope->next) {
 		if ((place = ell_scope_find (&scope->head, name))) {
 			ell_free_seq ((*place)->head->next);
-			(*place)->head->next = NULL;
-			return !v
-				|| ell_check (ell, ((*place)->head->next = ell_clone (v)));
+			(*place)->head->next = v;
+			return true;
 		}
 	}
 
