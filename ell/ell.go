@@ -44,7 +44,7 @@ type V struct {
 	Type   VType  // the type of this value
 	Next   *V     // next value in sequence
 	Head   *V     // the head of a VTypeList
-	String []byte // the immutable contents of a VTypeString
+	String string // the immutable contents of a VTypeString
 }
 
 // Clone clones a value without following the rest of its chain.
@@ -53,11 +53,9 @@ func (v *V) Clone() *V {
 		return nil
 	}
 	return &V{
-		Type: v.Type,
-		Next: nil,
-		Head: v.Head.CloneSeq(),
-		// TODO: Consider actually storing the string as a string,
-		// so that the compiler/runtime assure its immutability.
+		Type:   v.Type,
+		Next:   nil,
+		Head:   v.Head.CloneSeq(),
 		String: v.String,
 	}
 }
@@ -73,7 +71,7 @@ func (v *V) CloneSeq() *V {
 }
 
 // NewString creates a new value containing a string.
-func NewString(string []byte) *V {
+func NewString(string string) *V {
 	return &V{
 		Type:   VTypeString,
 		String: string,
@@ -316,7 +314,7 @@ func printString(w io.Writer, s *V) bool {
 		return false
 	}
 	if !printStringNeedsQuoting(s) {
-		_, _ = w.Write(s.String)
+		_, _ = w.Write([]byte(s.String))
 		return true
 	}
 
@@ -457,7 +455,7 @@ func (p *Parser) skipNL() {
 }
 
 func parsePrefixList(seq *V, name string) *V {
-	prefix := NewString([]byte(name))
+	prefix := NewString(name)
 	prefix.Next = seq
 	return NewList(prefix)
 }
@@ -471,7 +469,7 @@ func (p *Parser) parseV() *V {
 	p.skipNL()
 	switch {
 	case p.accept(tString):
-		return NewString(p.lexer.buf)
+		return NewString(string(p.lexer.buf))
 	case p.accept(tAt):
 		result = p.parseV()
 		return parsePrefixList(result, "set")
@@ -575,7 +573,7 @@ func scopeFind(scope **V, name string) **V {
 }
 
 func scopePrepend(scope **V, name string, v *V) {
-	key := NewString([]byte(name))
+	key := NewString(name)
 	pair := NewList(key)
 
 	key.Next = v
@@ -791,7 +789,7 @@ func NewNumber(n float64) *V {
 	if s[i-1] == '.' {
 		i--
 	}
-	return NewString([]byte(s[:i]))
+	return NewString(s[:i])
 }
 
 // Truthy decides whether any value is logically true.
@@ -802,9 +800,9 @@ func Truthy(v *V) bool {
 // NewBoolean creates a new string value copying the boolean's truthiness.
 func NewBoolean(b bool) *V {
 	if b {
-		return NewString([]byte("1"))
+		return NewString("1")
 	}
-	return NewString(nil)
+	return NewString("")
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -927,7 +925,7 @@ func fnPrint(ell *Ell, args *V, result **V) bool {
 	for ; args != nil; args = args.Next {
 		if args.Type != VTypeString {
 			PrintV(os.Stdout, args)
-		} else if _, err := os.Stdout.Write(args.String); err != nil {
+		} else if _, err := os.Stdout.WriteString(args.String); err != nil {
 			return ell.Errorf("write failed: %s", err)
 		}
 	}
@@ -940,10 +938,10 @@ func fnCat(ell *Ell, args *V, result **V) bool {
 		if args.Type != VTypeString {
 			PrintV(buf, args)
 		} else {
-			buf.Write(args.String)
+			buf.WriteString(args.String)
 		}
 	}
-	*result = NewString(buf.Bytes())
+	*result = NewString(buf.String())
 	return true
 }
 
@@ -978,7 +976,7 @@ func fnParse(ell *Ell, args *V, result **V) bool {
 		return ell.Errorf("first argument must be string")
 	}
 
-	res, err := NewParser(body.String).Run()
+	res, err := NewParser([]byte(body.String)).Run()
 	if err != nil {
 		return ell.Errorf("%s", err)
 	}
@@ -998,7 +996,7 @@ func fnTry(ell *Ell, args *V, result **V) bool {
 		return true
 	}
 
-	msg := NewString([]byte(ell.Error))
+	msg := NewString(ell.Error)
 	ell.Error = ""
 	*result = nil
 

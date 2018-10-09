@@ -52,7 +52,7 @@ func main() {
 	var args *ell.V
 	tail := &args
 	for i := 2; i < len(os.Args); i++ {
-		*tail = ell.NewString([]byte(os.Args[i]))
+		*tail = ell.NewString(os.Args[i])
 		tail = &(*tail).Next
 	}
 

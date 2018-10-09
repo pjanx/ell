@@ -46,7 +46,7 @@ func complete(L *ell.Ell, line string) (res []string) {
 
 	line = strings.ToLower(line)
 	for v := L.Globals; v != nil; v = v.Next {
-		name := string(v.Head.String)
+		name := v.Head.String
 		if strings.HasPrefix(strings.ToLower(name), line) {
 			res = append(res, name)
 		}
