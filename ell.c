@@ -1377,10 +1377,10 @@ const char ell_std_composed[] =
 	"set break { throw _break }\n"
 
 	// TODO: we should be able to apply them to all arguments
-	"set ne? { not (eq? @1 @2) }\n"  "set le? { ge? @2 @1 }\n"
-	"set ge? { not (lt? @1 @2) }\n"  "set gt? { lt? @2 @1 }\n"
-	"set <>  { not (= @1 @2)   }\n"  "set <=  { >= @2 @1  }\n"
-	"set >=  { not (< @1 @2)   }\n"  "set >   { <  @2 @1  }\n";
+	"set ne? { not (eq? @1 @2) }; set le? { ge? @2 @1 }\n"
+	"set ge? { not (lt? @1 @2) }; set gt? { lt? @2 @1 }\n"
+	"set <>  { not (= @1 @2)   }; set <=  { >= @2 @1  }\n"
+	"set >=  { not (< @1 @2)   }; set >   { <  @2 @1  }\n";
 
 static bool
 ell_std_initialize (struct ell *ell) {
