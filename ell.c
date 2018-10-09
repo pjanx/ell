@@ -1191,7 +1191,7 @@ ell_defn (ell_fn_throw) {
 	struct ell_v *message = args;
 	if (!message || message->type != ELL_STRING)
 		return ell_error (ell, "first argument must be string");
-	return ell_error (ell, message->string);
+	return ell_error (ell, "%s", message->string);
 }
 
 ell_defn (ell_fn_plus) {
