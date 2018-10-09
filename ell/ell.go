@@ -958,6 +958,9 @@ func fnSystem(ell *Ell, args *V, result **V) bool {
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	// Approximation of system(3) return value to match C ell at least a bit.
 	if err := cmd.Run(); err == nil {
