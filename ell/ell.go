@@ -545,7 +545,7 @@ func (p *Parser) Run() (result *V, err error) {
 // --- Runtime -----------------------------------------------------------------
 
 // Handler is a Go handler for an Ell function.
-type Handler func(*Ell, *V, **V) bool
+type Handler func(*Ell, []V, **V) bool
 
 // Ell is an interpreter context.
 type Ell struct {
@@ -666,7 +666,15 @@ func (ell *Ell) evalNative(name string, args *V, result **V) bool {
 	if !ell.evalArgs(args, &arguments) {
 		return false
 	}
-	return fn(ell, arguments, result)
+	// FIXME: Must change V.Head to a slice, too! This is just a provisional
+	// change to not have to do both at once! Lots of copying this way.
+	var sliced []V
+	for ; arguments != nil; arguments = arguments.Next {
+		singledOut := *arguments
+		singledOut.Next = nil
+		sliced = append(sliced, singledOut)
+	}
+	return fn(ell, sliced, result)
 }
 
 func (ell *Ell) evalResolved(body *V, args *V, result **V) bool {
@@ -807,40 +815,37 @@ func NewBoolean(b bool) *V {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-func fnLocal(ell *Ell, args *V, result **V) bool {
-	names := args
-	if names == nil || names.Type != VTypeList {
+func fnLocal(ell *Ell, args []V, result **V) bool {
+	if len(args) == 0 || args[0].Type != VTypeList {
 		return ell.Errorf("first argument must be a list")
 	}
 
 	// Duplicates or non-strings don't really matter to us, user's problem.
 	scope := &ell.scopes.Head
 
-	values := names.Next
-	for names = names.Head; names != nil; names = names.Next {
-		scopePrepend(scope, string(names.String), values.Clone())
-		if values != nil {
-			values = values.Next
+	values := args[1:]
+	for name := args[0].Head; name != nil; name = name.Next {
+		scopePrepend(scope, string(name.String), values[0].Clone())
+		if len(values) > 0 {
+			values = values[1:]
 		}
 	}
 	return true
 }
 
-func fnSet(ell *Ell, args *V, result **V) bool {
-	name := args
-	if name == nil || name.Type != VTypeString {
+func fnSet(ell *Ell, args []V, result **V) bool {
+	if len(args) == 0 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 
-	v := name.Next
-	if v != nil {
-		*result = v.Clone()
-		ell.Set(string(name.String), v)
+	if len(args) > 1 {
+		*result = args[1].Clone()
+		ell.Set(args[0].String, *result)
 		return true
 	}
 
 	// We return an empty list for a nil value.
-	if v = ell.Get(string(name.String)); v != nil {
+	if v := ell.Get(args[0].String); v != nil {
 		*result = v.Clone()
 	} else {
 		*result = NewList(nil)
@@ -848,47 +853,56 @@ func fnSet(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnList(ell *Ell, args *V, result **V) bool {
-	*result = NewList(args.CloneSeq())
+func sliceToSeq(slice []V) (res *V) {
+	out := &res
+	for _, v := range slice {
+		*out = v.Clone()
+		out = &(*out).Next
+	}
+	return
+}
+
+func fnList(ell *Ell, args []V, result **V) bool {
+	*result = NewList(sliceToSeq(args))
 	return true
 }
 
-func fnValues(ell *Ell, args *V, result **V) bool {
-	*result = args.CloneSeq()
+func fnValues(ell *Ell, args []V, result **V) bool {
+	*result = sliceToSeq(args)
 	return true
 }
 
-func fnIf(ell *Ell, args *V, result **V) bool {
-	var cond, body, keyword *V
-	for cond = args; ; cond = keyword.Next {
-		if cond == nil {
+func fnIf(ell *Ell, args []V, result **V) bool {
+	var cond, body, keyword int
+	for cond = 0; ; cond = keyword + 1 {
+		if cond >= len(args) {
 			return ell.Errorf("missing condition")
 		}
-		if body = cond.Next; body == nil {
+		if body = cond + 1; body >= len(args) {
 			return ell.Errorf("missing body")
 		}
 
 		var res *V
-		if !EvalAny(ell, cond, nil, &res) {
+		if !EvalAny(ell, &args[cond], nil, &res) {
 			return false
 		}
 		if Truthy(res) {
-			return EvalAny(ell, body, nil, result)
+			return EvalAny(ell, &args[body], nil, result)
 		}
 
-		if keyword = body.Next; keyword == nil {
+		if keyword = body + 1; keyword >= len(args) {
 			break
 		}
-		if keyword.Type != VTypeString {
+		if args[keyword].Type != VTypeString {
 			return ell.Errorf("expected keyword, got list")
 		}
 
-		switch kw := string(keyword.String); kw {
+		switch kw := args[keyword].String; kw {
 		case "else":
-			if body = keyword.Next; body == nil {
+			if body = keyword + 1; body >= len(args) {
 				return ell.Errorf("missing body")
 			}
-			return EvalAny(ell, body, nil, result)
+			return EvalAny(ell, &args[body], nil, result)
 		case "elif":
 		default:
 			return ell.Errorf("invalid keyword: %s", kw)
@@ -897,14 +911,15 @@ func fnIf(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnMap(ell *Ell, args *V, result **V) bool {
-	var body, values *V
-	if body = args; body == nil {
+func fnMap(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 {
 		return ell.Errorf("first argument must be a function")
 	}
-	if values = body.Next; values == nil || values.Type != VTypeList {
+	if len(args) < 2 || args[0].Type != VTypeList {
 		return ell.Errorf("second argument must be a list")
 	}
+
+	body, values := &args[0], &args[1]
 
 	var res *V
 	out := &res
@@ -921,37 +936,37 @@ func fnMap(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnPrint(ell *Ell, args *V, result **V) bool {
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
-			PrintV(os.Stdout, args)
-		} else if _, err := os.Stdout.WriteString(args.String); err != nil {
+func fnPrint(ell *Ell, args []V, result **V) bool {
+	for _, arg := range args {
+		if arg.Type != VTypeString {
+			PrintV(os.Stdout, &arg)
+		} else if _, err := os.Stdout.WriteString(arg.String); err != nil {
 			return ell.Errorf("write failed: %s", err)
 		}
 	}
 	return true
 }
 
-func fnCat(ell *Ell, args *V, result **V) bool {
+func fnCat(ell *Ell, args []V, result **V) bool {
 	buf := bytes.NewBuffer(nil)
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
-			PrintV(buf, args)
+	for _, arg := range args {
+		if arg.Type != VTypeString {
+			PrintV(buf, &arg)
 		} else {
-			buf.WriteString(args.String)
+			buf.WriteString(arg.String)
 		}
 	}
 	*result = NewString(buf.String())
 	return true
 }
 
-func fnSystem(ell *Ell, args *V, result **V) bool {
+func fnSystem(ell *Ell, args []V, result **V) bool {
 	var argv []string
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		argv = append(argv, string(args.String))
+		argv = append(argv, string(arg.String))
 	}
 	if len(argv) == 0 {
 		return ell.Errorf("command name required")
@@ -973,13 +988,12 @@ func fnSystem(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnParse(ell *Ell, args *V, result **V) bool {
-	body := args
-	if body == nil || body.Type != VTypeString {
+func fnParse(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 
-	res, err := NewParser([]byte(body.String)).Run()
+	res, err := NewParser([]byte(args[0].String)).Run()
 	if err != nil {
 		return ell.Errorf("%s", err)
 	}
@@ -987,14 +1001,15 @@ func fnParse(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnTry(ell *Ell, args *V, result **V) bool {
+func fnTry(ell *Ell, args []V, result **V) bool {
 	var body, handler *V
-	if body = args; body == nil {
+	if len(args) < 1 {
 		return ell.Errorf("first argument must be a function")
 	}
-	if handler = body.Next; handler == nil {
+	if len(args) < 2 {
 		return ell.Errorf("second argument must be a function")
 	}
+	body, handler = &args[0], &args[1]
 	if EvalAny(ell, body, nil, result) {
 		return true
 	}
@@ -1006,112 +1021,111 @@ func fnTry(ell *Ell, args *V, result **V) bool {
 	return EvalAny(ell, handler, msg, result)
 }
 
-func fnThrow(ell *Ell, args *V, result **V) bool {
-	message := args
-	if message == nil || message.Type != VTypeString {
+func fnThrow(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
-	return ell.Errorf("%s", message.String)
+	return ell.Errorf("%s", args[0].String)
 }
 
-func fnPlus(ell *Ell, args *V, result **V) bool {
+func fnPlus(ell *Ell, args []V, result **V) bool {
 	res := 0.
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		var arg float64
-		if n, _ := fmt.Sscan(string(args.String), &arg); n < 1 {
-			return ell.Errorf("invalid number: %s", args.String)
+		var value float64
+		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
-		res += arg
+		res += value
 	}
 	*result = NewNumber(res)
 	return true
 }
 
-func fnMinus(ell *Ell, args *V, result **V) bool {
-	if args == nil || args.Type != VTypeString {
+func fnMinus(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 
 	var res float64
-	if n, _ := fmt.Sscan(string(args.String), &res); n < 1 {
-		return ell.Errorf("invalid number: %f", args.String)
+	if n, _ := fmt.Sscan(args[0].String, &res); n < 1 {
+		return ell.Errorf("invalid number: %f", args[0].String)
 	}
-	if args = args.Next; args == nil {
+	if len(args) == 1 {
 		res = -res
 	}
 
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		var arg float64
-		if n, _ := fmt.Sscan(string(args.String), &arg); n < 1 {
-			return ell.Errorf("invalid number: %f", args.String)
+		var value float64
+		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
+			return ell.Errorf("invalid number: %f", arg.String)
 		}
-		res -= arg
+		res -= value
 	}
 	*result = NewNumber(res)
 	return true
 }
 
-func fnMultiply(ell *Ell, args *V, result **V) bool {
+func fnMultiply(ell *Ell, args []V, result **V) bool {
 	res := 1.
-	for ; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		var arg float64
-		if n, _ := fmt.Sscan(string(args.String), &arg); n < 1 {
-			return ell.Errorf("invalid number: %s", args.String)
+		var value float64
+		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
-		res *= arg
+		res *= value
 	}
 	*result = NewNumber(res)
 	return true
 }
 
-func fnDivide(ell *Ell, args *V, result **V) bool {
-	if args == nil || args.Type != VTypeString {
+func fnDivide(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 
 	var res float64
-	if n, _ := fmt.Sscan(string(args.String), &res); n < 1 {
-		return ell.Errorf("invalid number: %f", args.String)
+	if n, _ := fmt.Sscan(args[0].String, &res); n < 1 {
+		return ell.Errorf("invalid number: %f", args[0].String)
 	}
-	for args = args.Next; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		var arg float64
-		if n, _ := fmt.Sscan(string(args.String), &arg); n < 1 {
-			return ell.Errorf("invalid number: %f", args.String)
+		var value float64
+		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
+			return ell.Errorf("invalid number: %f", arg.String)
 		}
-		res /= arg
+		res /= value
 	}
 	*result = NewNumber(res)
 	return true
 }
 
-func fnNot(ell *Ell, args *V, result **V) bool {
-	if args == nil {
+func fnNot(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 {
 		return ell.Errorf("missing argument")
 	}
-	*result = NewBoolean(!Truthy(args))
+	*result = NewBoolean(!Truthy(&args[0]))
 	return true
 }
 
-func fnAnd(ell *Ell, args *V, result **V) bool {
+func fnAnd(ell *Ell, args []V, result **V) bool {
 	if args == nil {
 		*result = NewBoolean(true)
 		return true
 	}
-	for ; args != nil; args = args.Next {
+	for _, arg := range args {
 		*result = nil
-		if !EvalAny(ell, args, nil, result) {
+		if !EvalAny(ell, &arg, nil, result) {
 			return false
 		}
 		if !Truthy(*result) {
@@ -1122,9 +1136,9 @@ func fnAnd(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnOr(ell *Ell, args *V, result **V) bool {
-	for ; args != nil; args = args.Next {
-		if !EvalAny(ell, args, nil, result) {
+func fnOr(ell *Ell, args []V, result **V) bool {
+	for _, arg := range args {
+		if !EvalAny(ell, &arg, nil, result) {
 			return false
 		}
 		if Truthy(*result) {
@@ -1136,17 +1150,16 @@ func fnOr(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnEq(ell *Ell, args *V, result **V) bool {
-	etalon := args
-	if etalon == nil || etalon.Type != VTypeString {
+func fnEq(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
-	res := true
-	for args = etalon.Next; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	etalon, res := args[0].String, true
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		if res = string(etalon.String) == string(args.String); !res {
+		if res = etalon == arg.String; !res {
 			break
 		}
 	}
@@ -1154,41 +1167,39 @@ func fnEq(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnLt(ell *Ell, args *V, result **V) bool {
-	etalon := args
-	if etalon == nil || etalon.Type != VTypeString {
+func fnLt(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
-	res := true
-	for args = etalon.Next; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	etalon, res := args[0].String, true
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		if res = string(etalon.String) < string(args.String); !res {
+		if res = etalon < arg.String; !res {
 			break
 		}
-		etalon = args
+		etalon = arg.String
 	}
 	*result = NewBoolean(res)
 	return true
 }
 
-func fnEquals(ell *Ell, args *V, result **V) bool {
-	etalon := args
-	if etalon == nil || etalon.Type != VTypeString {
+func fnEquals(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 	var first, second float64
-	if n, _ := fmt.Sscan(string(etalon.String), &first); n < 1 {
-		return ell.Errorf("invalid number: %f", etalon.String)
+	if n, _ := fmt.Sscan(args[0].String, &first); n < 1 {
+		return ell.Errorf("invalid number: %f", args[0].String)
 	}
 	res := true
-	for args = etalon.Next; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		if n, _ := fmt.Sscan(string(args.String), &second); n < 1 {
-			return ell.Errorf("invalid number: %f", args.String)
+		if n, _ := fmt.Sscan(arg.String, &second); n < 1 {
+			return ell.Errorf("invalid number: %f", arg.String)
 		}
 		if res = first == second; !res {
 			break
@@ -1199,22 +1210,21 @@ func fnEquals(ell *Ell, args *V, result **V) bool {
 	return true
 }
 
-func fnLess(ell *Ell, args *V, result **V) bool {
-	etalon := args
-	if etalon == nil || etalon.Type != VTypeString {
+func fnLess(ell *Ell, args []V, result **V) bool {
+	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 	var first, second float64
-	if n, _ := fmt.Sscan(string(etalon.String), &first); n < 1 {
-		return ell.Errorf("invalid number: %f", etalon.String)
+	if n, _ := fmt.Sscan(args[0].String, &first); n < 1 {
+		return ell.Errorf("invalid number: %f", args[0].String)
 	}
 	res := true
-	for args = etalon.Next; args != nil; args = args.Next {
-		if args.Type != VTypeString {
+	for _, arg := range args[1:] {
+		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		if n, _ := fmt.Sscan(string(args.String), &second); n < 1 {
-			return ell.Errorf("invalid number: %f", args.String)
+		if n, _ := fmt.Sscan(arg.String, &second); n < 1 {
+			return ell.Errorf("invalid number: %f", arg.String)
 		}
 		if res = first < second; !res {
 			break
