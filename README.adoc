@@ -59,7 +59,7 @@ When evaluating a command, the first argument is typically a string with its
 name and it is resolved as if `set` was called on it.  Lists are left for
 execution as they are.
 
-The last expression in a block is the return value.
+The last expression in a block is the block's return value.
 
 Special Forms
 -------------
@@ -172,13 +172,16 @@ Install development packages for GNU Readline to get a REPL for toying around:
  $ make repl
  $ ./repl
 
+The Go port can be built using standard Go tools and behaves the same.
+
 Possible Ways of Complicating
 -----------------------------
  * `local [_a _b _rest] @args` would elegantly solve the problem of varargs,
    that is, unpack a list when names are list, and make the last element a list
    when there are more arguments than names
- * reference counting: currently all values are always copied as needed, which
-   is good enough for all imaginable use cases, simpler and less error-prone
+ * reference counting: in the C version, currently all values are always copied
+   as needed, which is good enough for all imaginable use cases, simpler and
+   less error-prone
 
 Contributing and Support
 ------------------------
