@@ -49,14 +49,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	var args *ell.V
-	tail := &args
+	var args []ell.V
 	for i := 2; i < len(os.Args); i++ {
-		*tail = ell.NewString(os.Args[i])
-		tail = &(*tail).Next
+		args = append(args, *ell.NewString(os.Args[i]))
 	}
 
-	var result *ell.V
+	var result []ell.V
 	if !L.EvalBlock(program, args, &result) {
 		fmt.Printf("%s: %s\n", "runtime error", L.Error)
 	}

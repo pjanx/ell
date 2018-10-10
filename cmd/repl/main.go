@@ -28,8 +28,8 @@ import (
 	"janouch.name/ell/ell"
 )
 
-func run(L *ell.Ell, program *ell.V) {
-	var result *ell.V
+func run(L *ell.Ell, program []ell.V) {
+	var result []ell.V
 	if !L.EvalBlock(program, nil, &result) {
 		fmt.Printf("\x1b[31m%s: %s\x1b[0m\n", "runtime error", L.Error)
 		L.Error = ""
@@ -48,8 +48,8 @@ func complete(L *ell.Ell, line string, pos int) (
 		head, line = line[:lastSpace+1], line[lastSpace+1:]
 	}
 
-	for v := L.Globals; v != nil; v = v.Next {
-		name := v.Head.String
+	for _, v := range L.Globals {
+		name := v.List[0].String
 		if strings.HasPrefix(strings.ToLower(name), line) {
 			completions = append(completions, name)
 		}

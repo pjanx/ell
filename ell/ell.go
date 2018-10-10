@@ -42,32 +42,28 @@ const (
 // V is a value in the ell language.
 type V struct {
 	Type   VType  // the type of this value
-	Next   *V     // next value in sequence
-	Head   *V     // the head of a VTypeList
+	List   []V    // the contents of a VTypeList
 	String string // the immutable contents of a VTypeString
 }
 
-// Clone clones a value without following the rest of its chain.
+// Clone clones a value including its sublists.
 func (v *V) Clone() *V {
 	if v == nil {
 		return nil
 	}
 	return &V{
 		Type:   v.Type,
-		Next:   nil,
-		Head:   v.Head.CloneSeq(),
+		List:   CloneSeq(v.List),
 		String: v.String,
 	}
 }
 
 // CloneSeq clones a value including the rest of its chain.
-func (v *V) CloneSeq() *V {
-	var head *V
-	for out := &head; v != nil; v = v.Next {
-		*out = v.Clone()
-		out = &(*out).Next
+func CloneSeq(v []V) (result []V) {
+	for _, v := range v {
+		result = append(result, *v.Clone())
 	}
-	return head
+	return
 }
 
 // NewString creates a new value containing a string.
@@ -79,10 +75,10 @@ func NewString(string string) *V {
 }
 
 // NewList creates a new list value containing the given sequence.
-func NewList(head *V) *V {
+func NewList(list []V) *V {
 	return &V{
 		Type: VTypeList,
-		Head: head,
+		List: list,
 	}
 }
 
@@ -334,49 +330,47 @@ func printString(w io.Writer, s *V) bool {
 }
 
 func printBlock(w io.Writer, list *V) bool {
-	if list.Head == nil || string(list.Head.String) != "block" {
+	if len(list.List) < 1 || list.List[0].String != "block" {
 		return false
 	}
 
-	list = list.Head.Next
-	for line := list; line != nil; line = line.Next {
-		if line.Type != VTypeList {
+	sublist := list.List[1:]
+	for _, subsub := range sublist {
+		if subsub.Type != VTypeList {
 			return false
 		}
 	}
 
 	_, _ = w.Write([]byte{'{'})
-	for line := list; line != nil; line = line.Next {
+	if len(sublist) > 0 {
 		_, _ = w.Write([]byte{' '})
-		PrintSeq(w, line.Head)
-
-		if line.Next != nil {
-			_, _ = w.Write([]byte{';'})
-		} else {
-			_, _ = w.Write([]byte{' '})
+		PrintSeq(w, sublist[0].List)
+		for _, subsub := range sublist[1:] {
+			_, _ = w.Write([]byte{';', ' '})
+			PrintSeq(w, subsub.List)
 		}
+		_, _ = w.Write([]byte{' '})
 	}
 	_, _ = w.Write([]byte{'}'})
 	return true
 }
 
 func printSet(w io.Writer, list *V) bool {
-	if list.Head == nil || string(list.Head.String) != "set" ||
-		list.Head.Next == nil || list.Head.Next.Next != nil {
+	if len(list.List) != 2 || list.List[0].String != "set" {
 		return false
 	}
 
 	_, _ = w.Write([]byte{'@'})
-	PrintSeq(w, list.Head.Next)
+	PrintSeq(w, list.List[1:])
 	return true
 }
 
 func printList(w io.Writer, list *V) bool {
-	if list.Head == nil || string(list.Head.String) != "list" {
+	if len(list.List) < 1 || list.List[0].String != "list" {
 		return false
 	}
 	_, _ = w.Write([]byte{'['})
-	PrintSeq(w, list.Head.Next)
+	PrintSeq(w, list.List[1:])
 	_, _ = w.Write([]byte{']'})
 	return true
 }
@@ -391,17 +385,19 @@ func PrintV(w io.Writer, v *V) {
 	}
 
 	_, _ = w.Write([]byte{'('})
-	PrintSeq(w, v.Head)
+	PrintSeq(w, v.List)
 	_, _ = w.Write([]byte{')'})
 }
 
 // PrintSeq serializes a sequence of values to the given writer.
-func PrintSeq(w io.Writer, v *V) {
-	for ; v != nil; v = v.Next {
-		PrintV(w, v)
-		if v.Next != nil {
-			_, _ = w.Write([]byte{' '})
-		}
+func PrintSeq(w io.Writer, seq []V) {
+	if len(seq) < 1 {
+		return
+	}
+	PrintV(w, &seq[0])
+	for _, v := range seq[1:] {
+		_, _ = w.Write([]byte{' '})
+		PrintV(w, &v)
 	}
 }
 
@@ -454,92 +450,85 @@ func (p *Parser) skipNL() {
 	}
 }
 
-func parsePrefixList(seq *V, name string) *V {
-	prefix := NewString(name)
-	prefix.Next = seq
-	return NewList(prefix)
+func parsePrefixList(seq []V, name string) *V {
+	prefix := []V{*NewString(name)}
+	return NewList(append(prefix, seq...))
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 func (p *Parser) parseV() *V {
-	var result *V
-	tail := &result
+	var seq []V
 
 	p.skipNL()
 	switch {
 	case p.accept(tString):
 		return NewString(string(p.lexer.buf))
 	case p.accept(tAt):
-		result = p.parseV()
-		return parsePrefixList(result, "set")
+		seq = []V{*p.parseV()}
+		return parsePrefixList(seq, "set")
 	case p.accept(tLParen):
 		for !p.accept(tRParen) {
-			*tail = p.parseV()
-			tail = &(*tail).Next
+			seq = append(seq, *p.parseV())
 			p.skipNL()
 		}
-		return NewList(result)
+		return NewList(seq)
 	case p.accept(tLBracket):
 		for !p.accept(tRBracket) {
-			*tail = p.parseV()
-			tail = &(*tail).Next
+			seq = append(seq, *p.parseV())
 			p.skipNL()
 		}
-		return parsePrefixList(result, "list")
+		return parsePrefixList(seq, "list")
 	case p.accept(tLBrace):
 		for {
-			*tail = p.parseLine()
-			if *tail == nil {
+			result := p.parseLine()
+			if result == nil {
 				break
 			}
-			tail = &(*tail).Next
+			seq = append(seq, *result)
 		}
 		p.expect(tRBrace)
-		return parsePrefixList(result, "block")
+		return parsePrefixList(seq, "block")
 	}
 	panic(p.lexer.errorf("unexpected `%s', expected a value", p.token))
 }
 
 func (p *Parser) parseLine() *V {
-	var result *V
-	tail := &result
+	var seq []V
 
 	for p.peek() != tRBrace && p.peek() != tAbort {
 		if !p.accept(tNewline) {
-			*tail = p.parseV()
-			tail = &(*tail).Next
-		} else if result != nil {
-			return NewList(result)
+			seq = append(seq, *p.parseV())
+		} else if len(seq) > 0 {
+			return NewList(seq)
 		}
 	}
-	if result != nil {
-		return NewList(result)
+	if len(seq) > 0 {
+		return NewList(seq)
 	}
 	return nil
 }
 
 // Run runs the parser and returns a value to be interpreted or an error.
-func (p *Parser) Run() (result *V, err error) {
+func (p *Parser) Run() (seq []V, err error) {
 	// "The convention in the Go libraries is that even when a package
 	// uses panic internally, its external API still presents explicit
 	// error return values." We're good.
 	defer func() {
 		if r := recover(); r != nil {
-			result, err = nil, r.(error)
+			seq, err = nil, r.(error)
 		}
 	}()
 
-	tail := &result
 	for {
-		*tail = p.parseLine()
-		if *tail == nil {
+		result := p.parseLine()
+		if result == nil {
 			break
 		}
-		tail = &(*tail).Next
+		seq = append(seq, *result)
 	}
 	p.expect(tAbort)
-	return result, nil
+	return seq, nil
 }
 
 // --- Runtime -----------------------------------------------------------------
@@ -549,8 +538,8 @@ type Handler func(*Ell, []V, *[]V) bool
 
 // Ell is an interpreter context.
 type Ell struct {
-	Globals *V                 // list of global variables
-	scopes  *V                 // dynamic scopes from the newest
+	Globals []*V               // list of global variables
+	scopes  [][]*V             // dynamic scopes from the newest
 	Native  map[string]Handler // maps strings to Go functions
 
 	Error string // error information
@@ -563,53 +552,54 @@ func New() *Ell {
 	}
 }
 
-func scopeFind(scope **V, name string) **V {
-	for ; *scope != nil; scope = &(*scope).Next {
-		if string((*scope).Head.String) == name {
-			return scope
+func scopeFind(scope []*V, name string) int {
+	for i, scope := range scope {
+		if scope.List[0].String == name {
+			return i
 		}
 	}
-	return nil
+	return -1
 }
 
-func scopePrepend(scope **V, name string, v *V) {
+// TODO: This is O(n), let's just make them a map[string]*V.
+func scopePrepend(scope []*V, name string, v *V) []*V {
 	key := NewString(name)
-	pair := NewList(key)
+	pair := NewList([]V{*key, *v})
 
-	key.Next = v
-	pair.Next = *scope
-	*scope = pair
+	result := make([]*V, len(scope)+1)
+	copy(result[1:], scope)
+	result[0] = pair
+	return result
 }
 
 // Get retrieves a value by name from the scope or from global variables.
 func (ell *Ell) Get(name string) *V {
-	var place **V
-	for scope := ell.scopes; scope != nil; scope = scope.Next {
-		if place = scopeFind(&scope.Head, name); place != nil {
-			return (*place).Head.Next
+	for _, scope := range ell.scopes {
+		if place := scopeFind(scope, name); place >= 0 {
+			return &scope[place].List[1]
 		}
 	}
-	if place = scopeFind(&ell.Globals, name); place != nil {
-		return (*place).Head.Next
+	if place := scopeFind(ell.Globals, name); place >= 0 {
+		return &ell.Globals[place].List[1]
 	}
 	return nil
 }
 
 // Set sets a value by name in the scope or in global variables.
 func (ell *Ell) Set(name string, v *V) {
-	var place **V
-	for scope := ell.scopes; scope != nil; scope = scope.Next {
-		if place = scopeFind(&scope.Head, name); place != nil {
-			(*place).Head.Next = v
+	for _, scope := range ell.scopes {
+		if place := scopeFind(scope, name); place >= 0 {
+			scope[place].List[1] = *v
 			return
 		}
 	}
 
 	// Variables only get deleted by "arg" or from the global scope.
-	if place = scopeFind(&ell.Globals, name); place != nil {
-		*place = (*place).Next
+	if place := scopeFind(ell.Globals, name); place >= 0 {
+		ell.Globals[place].List[1] = *v
+	} else {
+		ell.Globals = scopePrepend(ell.Globals, name, v)
 	}
-	scopePrepend(&ell.Globals, name, v)
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -626,89 +616,54 @@ func (ell *Ell) canModifyError() bool {
 	return ell.Error == "" || ell.Error[0] != '_'
 }
 
-func (ell *Ell) evalArgs(args *V, result **V) bool {
-	var res *V
-	out := &res
-
-	i := 0
-	for ; args != nil; args = args.Next {
-		var evaluated *V
+func (ell *Ell) evalArgs(args []V, result *[]V) bool {
+	for i, arg := range args {
+		var evaluated []V
 		// Arguments should not evaporate, default to a nil value.
-		if !ell.evalStatement(args, &evaluated) {
-			goto error
+		if !ell.evalStatement(&arg, &evaluated) {
+			// Once the code flows like this, at least make some use of it.
+			if ell.canModifyError() {
+				ell.Errorf("(argument %d) -> %s", i, ell.Error)
+			}
+			*result = nil
+			return false
 		}
-		if evaluated == nil {
-			evaluated = NewList(nil)
+		if len(evaluated) < 1 {
+			evaluated = []V{*NewList(nil)}
 		}
-		evaluated.Next = nil
-		*out = evaluated
-		out = &(*out).Next
-		i++
+		*result = append(*result, evaluated[0])
 	}
-	*result = res
 	return true
-
-error:
-	// Once the code flows like this, at least make some use of it.
-	if ell.canModifyError() {
-		ell.Errorf("(argument %d) -> %s", i, ell.Error)
-	}
-	return false
 }
 
-func sliceToSeq(slice []V) (res *V) {
-	out := &res
-	for _, v := range slice {
-		*out = v.Clone()
-		out = &(*out).Next
-	}
-	return
-}
-
-func (ell *Ell) evalNative(name string, args *V, result **V) bool {
+func (ell *Ell) evalNative(name string, args []V, result *[]V) bool {
 	fn := ell.Native[name]
 	if fn == nil {
 		return ell.Errorf("unknown function")
 	}
 
-	var arguments *V
-	if !ell.evalArgs(args, &arguments) {
-		return false
-	}
-	// FIXME: Must change V.Head to a slice, too! This is just a provisional
-	// change to not have to do both at once! Lots of copying this way.
-	var sliced []V
-	for ; arguments != nil; arguments = arguments.Next {
-		singledOut := *arguments
-		singledOut.Next = nil
-		sliced = append(sliced, singledOut)
-	}
-	var res []V
-	if !fn(ell, sliced, &res) {
-		return false
-	}
-	*result = sliceToSeq(res)
-	return true
+	var arguments []V
+	return ell.evalArgs(args, &arguments) && fn(ell, arguments, result)
 }
 
-func (ell *Ell) evalResolved(body *V, args *V, result **V) bool {
+func (ell *Ell) evalResolved(body *V, args []V, result *[]V) bool {
 	// Resolving names recursively could be pretty fatal, let's not do that.
 	if body.Type == VTypeString {
-		*result = body.Clone()
+		*result = []V{*body.Clone()}
 		return true
 	}
-	var arguments *V
+	var arguments []V
 	return ell.evalArgs(args, &arguments) &&
-		ell.EvalBlock(body.Head, arguments, result)
+		ell.EvalBlock(body.List, arguments, result)
 }
 
-func (ell *Ell) evalValue(body *V, result **V) bool {
-	args := body.Next
-	if body.Type == VTypeString {
-		name := string(body.String)
+func (ell *Ell) evalValue(body []V, result *[]V) bool {
+	args := body[1:]
+	if body[0].Type == VTypeString {
+		name := body[0].String
 		if name == "block" {
-			if args != nil {
-				*result = NewList(args.CloneSeq())
+			if len(args) > 0 {
+				*result = []V{*NewList(CloneSeq(args))}
 			}
 			return true
 		}
@@ -720,36 +675,37 @@ func (ell *Ell) evalValue(body *V, result **V) bool {
 
 	// When someone tries to call a block directly, we must evaluate it;
 	// e.g. something like `{ choose [@f1 @f2 @f3] } arg1 arg2 arg3`.
-	var evaluated *V
-	if !ell.evalStatement(body, &evaluated) {
+	var evaluated []V
+	if !ell.evalStatement(&body[0], &evaluated) {
 		return false
 	}
 
 	// It might a bit confusing that this doesn't evaluate arguments
 	// but neither does "block" and there's nothing to do here.
-	if evaluated == nil {
+	if len(evaluated) < 1 {
 		return true
 	}
-	return ell.evalResolved(evaluated, args, result)
+	return ell.evalResolved(&evaluated[0], args, result)
 }
 
-func (ell *Ell) evalStatement(statement *V, result **V) bool {
+func (ell *Ell) evalStatement(statement *V, result *[]V) bool {
 	if statement.Type == VTypeString {
-		*result = statement.Clone()
+		*result = []V{*statement.Clone()}
 		return true
 	}
 
 	// Executing a nil value results in no value. It's not very different from
 	// calling a block that returns no value--it's for our callers to resolve.
-	if statement.Head == nil || ell.evalValue(statement.Head, result) {
+	if len(statement.List) < 1 ||
+		ell.evalValue(statement.List, result) {
 		return true
 	}
 
 	*result = nil
 
 	name := "(block)"
-	if statement.Head.Type == VTypeString {
-		name = string(statement.Head.String)
+	if statement.List[0].Type == VTypeString {
+		name = statement.List[0].String
 	}
 
 	if ell.canModifyError() {
@@ -758,35 +714,31 @@ func (ell *Ell) evalStatement(statement *V, result **V) bool {
 	return false
 }
 
-func argsToScope(args *V, scope **V) {
-	args = NewList(args)
-	scopePrepend(scope, "args", args)
-
-	i := 0
-	for args = args.Head; args != nil; args = args.Next {
-		i++
-		scopePrepend(scope, fmt.Sprintf("%d", i), args.Clone())
+func argsToScope(args []V) []*V {
+	scope := scopePrepend(nil, "args", NewList(args))
+	for i, arg := range args {
+		scope = scopePrepend(scope, fmt.Sprintf("%d", i+1), arg.Clone())
 	}
-	*scope = NewList(*scope)
+	return scope
 }
 
 // EvalBlock executes a block and returns whatever the last statement returned,
 // eats args.
-func (ell *Ell) EvalBlock(body *V, args *V, result **V) bool {
-	var scope *V
-	argsToScope(args, &scope)
-
-	scope.Next = ell.scopes
-	ell.scopes = scope
+func (ell *Ell) EvalBlock(body []V, args []V, result *[]V) bool {
+	// TODO: This is O(n), let's just rather append and traverse in reverse.
+	newScopes := make([][]*V, len(ell.scopes)+1)
+	newScopes[0] = argsToScope(args)
+	copy(newScopes[1:], ell.scopes)
+	ell.scopes = newScopes
 
 	ok := true
-	for ; body != nil; body = body.Next {
+	for _, stmt := range body {
 		*result = nil
-		if ok = ell.evalStatement(body, result); !ok {
+		if ok = ell.evalStatement(&stmt, result); !ok {
 			break
 		}
 	}
-	ell.scopes = scope.Next
+	ell.scopes = ell.scopes[1:]
 	return ok
 }
 
@@ -798,15 +750,15 @@ func EvalAny(ell *Ell, body *V, arg *V, result *[]V) bool {
 		*result = []V{*body.Clone()}
 		return true
 	}
-	var res *V
-	if !ell.EvalBlock(body.Head, arg.Clone(), &res) {
+	var args []V
+	if arg != nil {
+		args = append(args, *arg.Clone())
+	}
+	var res []V
+	if !ell.EvalBlock(body.List, args, &res) {
 		return false
 	}
-	for ; res != nil; res = res.Next {
-		singledOut := *res
-		singledOut.Next = nil
-		*result = append(*result, singledOut)
-	}
+	*result = append(*result, res...)
 	return true
 }
 
@@ -825,7 +777,7 @@ func NewNumber(n float64) *V {
 
 // Truthy decides whether any value is logically true.
 func Truthy(v *V) bool {
-	return v != nil && (v.Head != nil || len(v.String) > 0)
+	return v != nil && (len(v.List) > 0 || len(v.String) > 0)
 }
 
 // NewBoolean creates a new string value copying the boolean's truthiness.
@@ -844,11 +796,11 @@ func fnLocal(ell *Ell, args []V, result *[]V) bool {
 	}
 
 	// Duplicates or non-strings don't really matter to us, user's problem.
-	scope := &ell.scopes.Head
+	scope := &ell.scopes[0]
 
 	values := args[1:]
-	for name := args[0].Head; name != nil; name = name.Next {
-		scopePrepend(scope, string(name.String), values[0].Clone())
+	for _, name := range args[0].List {
+		*scope = scopePrepend(*scope, name.String, values[0].Clone())
 		if len(values) > 0 {
 			values = values[1:]
 		}
@@ -877,7 +829,7 @@ func fnSet(ell *Ell, args []V, result *[]V) bool {
 }
 
 func fnList(ell *Ell, args []V, result *[]V) bool {
-	*result = []V{*NewList(sliceToSeq(args))}
+	*result = []V{*NewList(args)}
 	return true
 }
 
@@ -936,12 +888,12 @@ func fnMap(ell *Ell, args []V, result *[]V) bool {
 	body, values := &args[0], &args[1]
 
 	var res []V
-	for v := values.Head; v != nil; v = v.Next {
-		if !EvalAny(ell, body, v, &res) {
+	for _, v := range values.List {
+		if !EvalAny(ell, body, &v, &res) {
 			return false
 		}
 	}
-	*result = []V{*NewList(sliceToSeq(res))}
+	*result = []V{*NewList(res)}
 	return true
 }
 
@@ -975,7 +927,7 @@ func fnSystem(ell *Ell, args []V, result *[]V) bool {
 		if arg.Type != VTypeString {
 			return ell.Errorf("arguments must be strings")
 		}
-		argv = append(argv, string(arg.String))
+		argv = append(argv, arg.String)
 	}
 	if len(argv) == 0 {
 		return ell.Errorf("command name required")
@@ -1299,6 +1251,6 @@ func StdInitialize(ell *Ell) bool {
 		return false
 	}
 
-	var result *V
+	var result []V
 	return ell.EvalBlock(program, nil, &result)
 }
