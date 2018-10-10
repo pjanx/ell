@@ -793,12 +793,14 @@ ell_can_modify_error (struct ell *ell) {
 	return !ell->memory_failure && ell->error[0] != '_';
 }
 
-static bool ell_eval_statement (struct ell *, struct ell_v *, struct ell_v **);
+static bool ell_eval_statement
+	(struct ell *, const struct ell_v *, struct ell_v **);
 static bool ell_eval_block
-	(struct ell *, struct ell_v *, struct ell_v *, struct ell_v **);
+	(struct ell *, const struct ell_v *, struct ell_v *, struct ell_v **);
 
 static bool
-ell_eval_args (struct ell *ell, struct ell_v *args, struct ell_v **result) {
+ell_eval_args (struct ell *ell,
+	const struct ell_v *args, struct ell_v **result) {
 	size_t i = 0;
 	struct ell_v *res = NULL, **out = &res;
 	for (; args; args = args->next) {
@@ -828,7 +830,7 @@ error:
 }
 
 static bool
-ell_eval_native (struct ell *ell, const char *name, struct ell_v *args,
+ell_eval_native (struct ell *ell, const char *name, const struct ell_v *args,
 	struct ell_v **result) {
 	struct ell_native_fn *fn = ell_native_find (ell, name);
 	if (!fn)
@@ -844,8 +846,8 @@ ell_eval_native (struct ell *ell, const char *name, struct ell_v *args,
 }
 
 static bool
-ell_eval_resolved (struct ell *ell, struct ell_v *body, struct ell_v *args,
-	struct ell_v **result) {
+ell_eval_resolved (struct ell *ell,
+	const struct ell_v *body, const struct ell_v *args, struct ell_v **result) {
 	// Resolving names recursively could be pretty fatal, let's not do that
 	if (body->type == ELL_STRING)
 		return ell_check (ell, (*result = ell_clone (body)));
@@ -855,13 +857,16 @@ ell_eval_resolved (struct ell *ell, struct ell_v *body, struct ell_v *args,
 }
 
 static bool
-ell_eval_value (struct ell *ell, struct ell_v *body, struct ell_v **result) {
-	struct ell_v *args = body->next;
+ell_eval_value (struct ell *ell, const struct ell_v *body,
+	struct ell_v **result) {
+	const struct ell_v *args = body->next;
 	if (body->type == ELL_STRING) {
 		const char *name = body->string;
-		if (!strcmp (name, "block"))
-			return (!args || ell_check (ell, (args = ell_clone_seq (args))))
-				&& ell_check (ell, (*result = ell_list (args)));
+		if (!strcmp (name, "block")) {
+			struct ell_v *cloned = NULL;
+			return (!args || ell_check (ell, (cloned = ell_clone_seq (args))))
+				&& ell_check (ell, (*result = ell_list (cloned)));
+		}
 		if ((body = ell_get (ell, name)))
 			return ell_eval_resolved (ell, body, args, result);
 		return ell_eval_native (ell, name, args, result);
@@ -885,7 +890,7 @@ ell_eval_value (struct ell *ell, struct ell_v *body, struct ell_v **result) {
 
 static bool
 ell_eval_statement
-	(struct ell *ell, struct ell_v *statement, struct ell_v **result) {
+	(struct ell *ell, const struct ell_v *statement, struct ell_v **result) {
 	if (statement->type == ELL_STRING)
 		return ell_check (ell, (*result = ell_clone (statement)));
 
@@ -931,7 +936,7 @@ args_to_scope (struct ell *ell, struct ell_v *args, struct ell_v **scope) {
 
 /// Execute a block and return whatever the last statement returned, eats args
 static bool
-ell_eval_block (struct ell *ell, struct ell_v *body, struct ell_v *args,
+ell_eval_block (struct ell *ell, const struct ell_v *body, struct ell_v *args,
 	struct ell_v **result) {
 	struct ell_v *scope = NULL;
 	if (!args_to_scope (ell, args, &scope)) {
@@ -961,13 +966,14 @@ ell_eval_block (struct ell *ell, struct ell_v *body, struct ell_v *args,
 	(struct ell *ell, struct ell_v *args, struct ell_v **result)
 
 static bool
-ell_eval_any (struct ell *ell, struct ell_v *body, struct ell_v *arg,
-	struct ell_v **result) {
+ell_eval_any (struct ell *ell,
+	const struct ell_v *body, const struct ell_v *arg, struct ell_v **result) {
 	if (body->type == ELL_STRING)
 		return ell_check (ell, (*result = ell_clone (body)));
-	if (arg && !ell_check (ell, (arg = ell_clone (arg))))
+	struct ell_v *cloned_arg = NULL;
+	if (arg && !ell_check (ell, (cloned_arg = ell_clone (arg))))
 		return false;
-	return ell_eval_block (ell, body->head, arg, result);
+	return ell_eval_block (ell, body->head, cloned_arg, result);
 }
 
 static struct ell_v *
