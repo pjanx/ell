@@ -39,21 +39,24 @@ func run(L *ell.Ell, program *ell.V) {
 	}
 }
 
-func complete(L *ell.Ell, line string) (res []string) {
-	// This never actually completes anything, just shows the options,
-	// we'd have to figure out the longest common prefix.
-	res = append(res, line)
+func complete(L *ell.Ell, line string, pos int) (
+	head string, completions []string, tail string) {
+	tail = string([]rune(line)[pos:])
 
-	line = strings.ToLower(line)
+	lastSpace := strings.LastIndexAny(string([]rune(line)[:pos]), " ()[]{};\n")
+	if lastSpace > -1 {
+		head, line = line[:lastSpace+1], line[lastSpace+1:]
+	}
+
 	for v := L.Globals; v != nil; v = v.Next {
 		name := v.Head.String
 		if strings.HasPrefix(strings.ToLower(name), line) {
-			res = append(res, name)
+			completions = append(completions, name)
 		}
 	}
 	for name := range L.Native {
 		if strings.HasPrefix(strings.ToLower(name), line) {
-			res = append(res, name)
+			completions = append(completions, name)
 		}
 	}
 	return
@@ -66,7 +69,10 @@ func main() {
 	}
 
 	line := liner.NewLiner()
-	line.SetCompleter(func(line string) []string { return complete(L, line) })
+	line.SetWordCompleter(func(line string, pos int) (
+		string, []string, string) {
+		return complete(L, line, pos)
+	})
 	line.SetMultiLineMode(true)
 	line.SetTabCompletionStyle(liner.TabPrints)
 
