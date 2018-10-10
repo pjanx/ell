@@ -29,8 +29,7 @@ import (
 )
 
 func run(L *ell.Ell, program []ell.V) {
-	var result []ell.V
-	if !L.EvalBlock(program, nil, &result) {
+	if result, ok := L.EvalBlock(program, nil); !ok {
 		fmt.Printf("\x1b[31m%s: %s\x1b[0m\n", "runtime error", L.Error)
 		L.Error = ""
 	} else {

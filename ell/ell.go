@@ -346,7 +346,7 @@ func printBlock(w io.Writer, list *V) bool {
 		_, _ = w.Write([]byte{' '})
 		PrintSeq(w, sublist[0].List)
 		for _, subsub := range sublist[1:] {
-			_, _ = w.Write([]byte{';', ' '})
+			_, _ = w.Write([]byte("; "))
 			PrintSeq(w, subsub.List)
 		}
 		_, _ = w.Write([]byte{' '})
@@ -391,13 +391,12 @@ func PrintV(w io.Writer, v *V) {
 
 // PrintSeq serializes a sequence of values to the given writer.
 func PrintSeq(w io.Writer, seq []V) {
-	if len(seq) < 1 {
-		return
-	}
-	PrintV(w, &seq[0])
-	for _, v := range seq[1:] {
-		_, _ = w.Write([]byte{' '})
-		PrintV(w, &v)
+	if len(seq) > 0 {
+		PrintV(w, &seq[0])
+		for _, v := range seq[1:] {
+			_, _ = w.Write([]byte{' '})
+			PrintV(w, &v)
+		}
 	}
 }
 
@@ -451,16 +450,15 @@ func (p *Parser) skipNL() {
 }
 
 func parsePrefixList(seq []V, name string) *V {
-	prefix := []V{*NewString(name)}
-	return NewList(append(prefix, seq...))
+	return NewList(append([]V{*NewString(name)}, seq...))
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 func (p *Parser) parseV() *V {
-	var seq []V
-
 	p.skipNL()
+
+	var seq []V
 	switch {
 	case p.accept(tString):
 		return NewString(string(p.lexer.buf))
@@ -495,7 +493,6 @@ func (p *Parser) parseV() *V {
 
 func (p *Parser) parseLine() *V {
 	var seq []V
-
 	for p.peek() != tRBrace && p.peek() != tAbort {
 		if !p.accept(tNewline) {
 			seq = append(seq, *p.parseV())
@@ -534,7 +531,7 @@ func (p *Parser) Run() (seq []V, err error) {
 // --- Runtime -----------------------------------------------------------------
 
 // Handler is a Go handler for an Ell function.
-type Handler func(*Ell, []V, *[]V) bool
+type Handler func(ell *Ell, args []V) (result []V, ok bool)
 
 // Ell is an interpreter context.
 type Ell struct {
@@ -590,10 +587,11 @@ func (ell *Ell) Set(name string, v *V) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-// Errorf sets an error message in the interpreter context and returns false.
-func (ell *Ell) Errorf(format string, args ...interface{}) bool {
+// Errorf sets an error message in the interpreter context and returns an empty
+// sequence and false.
+func (ell *Ell) Errorf(format string, args ...interface{}) ([]V, bool) {
 	ell.Error = fmt.Sprintf(format, args...)
-	return false
+	return nil, false
 }
 
 func (ell *Ell) canModifyError() bool {
@@ -602,92 +600,89 @@ func (ell *Ell) canModifyError() bool {
 	return ell.Error == "" || ell.Error[0] != '_'
 }
 
-func (ell *Ell) evalArgs(args []V, result *[]V) bool {
+func (ell *Ell) evalArgs(args []V) (result []V, ok bool) {
 	for i, arg := range args {
-		var evaluated []V
-		// Arguments should not evaporate, default to a nil value.
-		if !ell.evalStatement(&arg, &evaluated) {
+		evaluated, ok := ell.evalStatement(&arg)
+		if !ok {
 			// Once the code flows like this, at least make some use of it.
 			if ell.canModifyError() {
 				ell.Errorf("(argument %d) -> %s", i, ell.Error)
 			}
-			*result = nil
-			return false
+			return nil, false
 		}
+		// Arguments should not evaporate, default to a nil value.
 		if len(evaluated) < 1 {
 			evaluated = []V{*NewList(nil)}
 		}
-		*result = append(*result, evaluated[0])
+		result = append(result, evaluated[0])
 	}
-	return true
+	return result, true
 }
 
-func (ell *Ell) evalNative(name string, args []V, result *[]V) bool {
+func (ell *Ell) evalNative(name string, args []V) (result []V, ok bool) {
 	fn := ell.Native[name]
 	if fn == nil {
 		return ell.Errorf("unknown function")
 	}
-
-	var arguments []V
-	return ell.evalArgs(args, &arguments) && fn(ell, arguments, result)
+	if arguments, ok := ell.evalArgs(args); ok {
+		return fn(ell, arguments)
+	}
+	return nil, false
 }
 
-func (ell *Ell) evalResolved(body *V, args []V, result *[]V) bool {
+func (ell *Ell) evalResolved(body *V, args []V) (result []V, ok bool) {
 	// Resolving names recursively could be pretty fatal, let's not do that.
 	if body.Type == VTypeString {
-		*result = []V{*body.Clone()}
-		return true
+		return []V{*body}, true
 	}
-	var arguments []V
-	return ell.evalArgs(args, &arguments) &&
-		ell.EvalBlock(body.List, arguments, result)
+	if arguments, ok := ell.evalArgs(args); ok {
+		return ell.EvalBlock(body.List, arguments)
+	}
+	return nil, false
 }
 
-func (ell *Ell) evalValue(body []V, result *[]V) bool {
+func (ell *Ell) evalValue(body []V) (result []V, ok bool) {
 	args := body[1:]
 	if body[0].Type == VTypeString {
 		name := body[0].String
 		if name == "block" {
 			if len(args) > 0 {
-				*result = []V{*NewList(CloneSeq(args))}
+				result = []V{*NewList(CloneSeq(args))}
 			}
-			return true
+			return result, true
 		}
 		if body := ell.Get(name); body != nil {
-			return ell.evalResolved(body, args, result)
+			return ell.evalResolved(body, args)
 		}
-		return ell.evalNative(name, args, result)
+		return ell.evalNative(name, args)
 	}
 
 	// When someone tries to call a block directly, we must evaluate it;
 	// e.g. something like `{ choose [@f1 @f2 @f3] } arg1 arg2 arg3`.
-	var evaluated []V
-	if !ell.evalStatement(&body[0], &evaluated) {
-		return false
+	if evaluated, ok := ell.evalStatement(&body[0]); !ok {
+		return nil, false
+	} else if len(evaluated) > 0 {
+		return ell.evalResolved(&evaluated[0], args)
 	}
 
 	// It might a bit confusing that this doesn't evaluate arguments
 	// but neither does "block" and there's nothing to do here.
-	if len(evaluated) < 1 {
-		return true
-	}
-	return ell.evalResolved(&evaluated[0], args, result)
+	return nil, true
 }
 
-func (ell *Ell) evalStatement(statement *V, result *[]V) bool {
+func (ell *Ell) evalStatement(statement *V) (result []V, ok bool) {
 	if statement.Type == VTypeString {
-		*result = []V{*statement.Clone()}
-		return true
+		return []V{*statement}, true
 	}
 
 	// Executing a nil value results in no value. It's not very different from
 	// calling a block that returns no value--it's for our callers to resolve.
-	if len(statement.List) < 1 ||
-		ell.evalValue(statement.List, result) {
-		return true
+	if len(statement.List) < 1 {
+		return nil, true
 	}
-
-	*result = nil
+	if result, ok = ell.evalValue(statement.List); ok {
+		return
+	}
 
 	name := "(block)"
 	if statement.List[0].Type == VTypeString {
@@ -697,7 +692,7 @@ func (ell *Ell) evalStatement(statement *V, result *[]V) bool {
 	if ell.canModifyError() {
 		ell.Errorf("%s -> %s", name, ell.Error)
 	}
-	return false
+	return nil, false
 }
 
 func argsToScope(args []V) map[string]V {
@@ -710,38 +705,34 @@ func argsToScope(args []V) map[string]V {
 
 // EvalBlock executes a block and returns whatever the last statement returned,
 // eats args.
-func (ell *Ell) EvalBlock(body []V, args []V, result *[]V) bool {
+func (ell *Ell) EvalBlock(body []V, args []V) (result []V, ok bool) {
 	ell.scopes = append(ell.scopes, argsToScope(args))
 
-	ok := true
+	ok = true
 	for _, stmt := range body {
-		*result = nil
-		if ok = ell.evalStatement(&stmt, result); !ok {
+		if result, ok = ell.evalStatement(&stmt); !ok {
 			break
 		}
 	}
 	ell.scopes = ell.scopes[:len(ell.scopes)-1]
-	return ok
+	return result, ok
 }
 
 // --- Standard library --------------------------------------------------------
 
 // EvalAny evaluates any value and appends to the result.
-func EvalAny(ell *Ell, body *V, arg *V, result *[]V) bool {
+func EvalAny(ell *Ell, body *V, arg *V) (result []V, ok bool) {
 	if body.Type == VTypeString {
-		*result = []V{*body.Clone()}
-		return true
+		return []V{*body}, true
 	}
 	var args []V
 	if arg != nil {
 		args = append(args, *arg.Clone())
 	}
-	var res []V
-	if !ell.EvalBlock(body.List, args, &res) {
-		return false
+	if res, ok := ell.EvalBlock(body.List, args); ok {
+		return res, true
 	}
-	*result = append(*result, res...)
-	return true
+	return nil, false
 }
 
 // NewNumber creates a new string value containing a number.
@@ -772,7 +763,7 @@ func NewBoolean(b bool) *V {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-func fnLocal(ell *Ell, args []V, result *[]V) bool {
+func fnLocal(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) == 0 || args[0].Type != VTypeList {
 		return ell.Errorf("first argument must be a list")
 	}
@@ -787,40 +778,38 @@ func fnLocal(ell *Ell, args []V, result *[]V) bool {
 			values = values[1:]
 		}
 	}
-	return true
+	return nil, true
 }
 
-func fnSet(ell *Ell, args []V, result *[]V) bool {
+func fnSet(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) == 0 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 
 	if len(args) > 1 {
-		*result = []V{*args[1].Clone()}
-		ell.Set(args[0].String, &(*result)[0])
-		return true
+		result = []V{*args[1].Clone()}
+		ell.Set(args[0].String, &result[0])
+		return result, true
 	}
 
 	// We return an empty list for a nil value.
 	if v := ell.Get(args[0].String); v != nil {
-		*result = []V{*v.Clone()}
+		result = []V{*v.Clone()}
 	} else {
-		*result = []V{*NewList(nil)}
+		result = []V{*NewList(nil)}
 	}
-	return true
+	return result, true
 }
 
-func fnList(ell *Ell, args []V, result *[]V) bool {
-	*result = []V{*NewList(args)}
-	return true
+func fnList(ell *Ell, args []V) (result []V, ok bool) {
+	return []V{*NewList(args)}, true
 }
 
-func fnValues(ell *Ell, args []V, result *[]V) bool {
-	*result = args
-	return true
+func fnValues(ell *Ell, args []V) (result []V, ok bool) {
+	return args, true
 }
 
-func fnIf(ell *Ell, args []V, result *[]V) bool {
+func fnIf(ell *Ell, args []V) (result []V, ok bool) {
 	var cond, body, keyword int
 	for cond = 0; ; cond = keyword + 1 {
 		if cond >= len(args) {
@@ -831,11 +820,11 @@ func fnIf(ell *Ell, args []V, result *[]V) bool {
 		}
 
 		var res []V
-		if !EvalAny(ell, &args[cond], nil, &res) {
-			return false
+		if res, ok = EvalAny(ell, &args[cond], nil); !ok {
+			return nil, false
 		}
 		if len(res) > 0 && Truthy(&res[0]) {
-			return EvalAny(ell, &args[body], nil, result)
+			return EvalAny(ell, &args[body], nil)
 		}
 
 		if keyword = body + 1; keyword >= len(args) {
@@ -850,16 +839,16 @@ func fnIf(ell *Ell, args []V, result *[]V) bool {
 			if body = keyword + 1; body >= len(args) {
 				return ell.Errorf("missing body")
 			}
-			return EvalAny(ell, &args[body], nil, result)
+			return EvalAny(ell, &args[body], nil)
 		case "elif":
 		default:
 			return ell.Errorf("invalid keyword: %s", kw)
 		}
 	}
-	return true
+	return nil, true
 }
 
-func fnMap(ell *Ell, args []V, result *[]V) bool {
+func fnMap(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 {
 		return ell.Errorf("first argument must be a function")
 	}
@@ -868,18 +857,17 @@ func fnMap(ell *Ell, args []V, result *[]V) bool {
 	}
 
 	body, values := &args[0], &args[1]
-
-	var res []V
 	for _, v := range values.List {
-		if !EvalAny(ell, body, &v, &res) {
-			return false
+		res, ok := EvalAny(ell, body, &v)
+		if !ok {
+			return nil, false
 		}
+		result = append(result, res...)
 	}
-	*result = []V{*NewList(res)}
-	return true
+	return []V{*NewList(result)}, true
 }
 
-func fnPrint(ell *Ell, args []V, result *[]V) bool {
+func fnPrint(ell *Ell, args []V) (result []V, ok bool) {
 	for _, arg := range args {
 		if arg.Type != VTypeString {
 			PrintV(os.Stdout, &arg)
@@ -887,10 +875,10 @@ func fnPrint(ell *Ell, args []V, result *[]V) bool {
 			return ell.Errorf("write failed: %s", err)
 		}
 	}
-	return true
+	return nil, true
 }
 
-func fnCat(ell *Ell, args []V, result *[]V) bool {
+func fnCat(ell *Ell, args []V) (result []V, ok bool) {
 	buf := bytes.NewBuffer(nil)
 	for _, arg := range args {
 		if arg.Type != VTypeString {
@@ -899,11 +887,10 @@ func fnCat(ell *Ell, args []V, result *[]V) bool {
 			buf.WriteString(arg.String)
 		}
 	}
-	*result = []V{*NewString(buf.String())}
-	return true
+	return []V{*NewString(buf.String())}, true
 }
 
-func fnSystem(ell *Ell, args []V, result *[]V) bool {
+func fnSystem(ell *Ell, args []V) (result []V, ok bool) {
 	var argv []string
 	for _, arg := range args {
 		if arg.Type != VTypeString {
@@ -922,16 +909,15 @@ func fnSystem(ell *Ell, args []V, result *[]V) bool {
 
 	// Approximation of system(3) return value to match C ell at least a bit.
 	if err := cmd.Run(); err == nil {
-		*result = []V{*NewNumber(0)}
+		return []V{*NewNumber(0)}, true
 	} else if _, ok := err.(*exec.Error); ok {
 		return ell.Errorf("%s", err)
 	} else {
-		*result = []V{*NewNumber(1)}
+		return []V{*NewNumber(1)}, true
 	}
-	return true
 }
 
-func fnParse(ell *Ell, args []V, result *[]V) bool {
+func fnParse(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -940,11 +926,10 @@ func fnParse(ell *Ell, args []V, result *[]V) bool {
 	if err != nil {
 		return ell.Errorf("%s", err)
 	}
-	*result = []V{*NewList(res)}
-	return true
+	return []V{*NewList(res)}, true
 }
 
-func fnTry(ell *Ell, args []V, result *[]V) bool {
+func fnTry(ell *Ell, args []V) (result []V, ok bool) {
 	var body, handler *V
 	if len(args) < 1 {
 		return ell.Errorf("first argument must be a function")
@@ -953,25 +938,23 @@ func fnTry(ell *Ell, args []V, result *[]V) bool {
 		return ell.Errorf("second argument must be a function")
 	}
 	body, handler = &args[0], &args[1]
-	if EvalAny(ell, body, nil, result) {
-		return true
+	if result, ok = EvalAny(ell, body, nil); ok {
+		return
 	}
 
 	msg := NewString(ell.Error)
 	ell.Error = ""
-	*result = nil
-
-	return EvalAny(ell, handler, msg, result)
+	return EvalAny(ell, handler, msg)
 }
 
-func fnThrow(ell *Ell, args []V, result *[]V) bool {
+func fnThrow(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
 	return ell.Errorf("%s", args[0].String)
 }
 
-func fnPlus(ell *Ell, args []V, result *[]V) bool {
+func fnPlus(ell *Ell, args []V) (result []V, ok bool) {
 	res := 0.
 	for _, arg := range args {
 		if arg.Type != VTypeString {
@@ -983,11 +966,10 @@ func fnPlus(ell *Ell, args []V, result *[]V) bool {
 		}
 		res += value
 	}
-	*result = []V{*NewNumber(res)}
-	return true
+	return []V{*NewNumber(res)}, true
 }
 
-func fnMinus(ell *Ell, args []V, result *[]V) bool {
+func fnMinus(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1010,11 +992,10 @@ func fnMinus(ell *Ell, args []V, result *[]V) bool {
 		}
 		res -= value
 	}
-	*result = []V{*NewNumber(res)}
-	return true
+	return []V{*NewNumber(res)}, true
 }
 
-func fnMultiply(ell *Ell, args []V, result *[]V) bool {
+func fnMultiply(ell *Ell, args []V) (result []V, ok bool) {
 	res := 1.
 	for _, arg := range args {
 		if arg.Type != VTypeString {
@@ -1026,11 +1007,10 @@ func fnMultiply(ell *Ell, args []V, result *[]V) bool {
 		}
 		res *= value
 	}
-	*result = []V{*NewNumber(res)}
-	return true
+	return []V{*NewNumber(res)}, true
 }
 
-func fnDivide(ell *Ell, args []V, result *[]V) bool {
+func fnDivide(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1049,51 +1029,46 @@ func fnDivide(ell *Ell, args []V, result *[]V) bool {
 		}
 		res /= value
 	}
-	*result = []V{*NewNumber(res)}
-	return true
+	return []V{*NewNumber(res)}, true
 }
 
-func fnNot(ell *Ell, args []V, result *[]V) bool {
+func fnNot(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 {
 		return ell.Errorf("missing argument")
 	}
-	*result = []V{*NewBoolean(!Truthy(&args[0]))}
-	return true
+	return []V{*NewBoolean(!Truthy(&args[0]))}, true
 }
 
-func fnAnd(ell *Ell, args []V, result *[]V) bool {
+func fnAnd(ell *Ell, args []V) (result []V, ok bool) {
 	if args == nil {
-		*result = []V{*NewBoolean(true)}
-		return true
+		return []V{*NewBoolean(true)}, true
 	}
 	for _, arg := range args {
-		*result = nil
-		if !EvalAny(ell, &arg, nil, result) {
-			return false
+		result, ok = EvalAny(ell, &arg, nil)
+		if !ok {
+			return nil, false
 		}
-		if len(*result) < 1 || !Truthy(&(*result)[0]) {
-			*result = []V{*NewBoolean(false)}
-			return true
+		if len(result) < 1 || !Truthy(&result[0]) {
+			return []V{*NewBoolean(false)}, true
 		}
 	}
-	return true
+	return result, true
 }
 
-func fnOr(ell *Ell, args []V, result *[]V) bool {
+func fnOr(ell *Ell, args []V) (result []V, ok bool) {
 	for _, arg := range args {
-		if !EvalAny(ell, &arg, nil, result) {
-			return false
+		result, ok = EvalAny(ell, &arg, nil)
+		if !ok {
+			return nil, false
 		}
-		if len(*result) > 0 && Truthy(&(*result)[0]) {
-			return true
+		if len(result) > 0 && Truthy(&result[0]) {
+			return result, true
 		}
-		*result = nil
 	}
-	*result = []V{*NewBoolean(false)}
-	return true
+	return []V{*NewBoolean(false)}, true
 }
 
-func fnEq(ell *Ell, args []V, result *[]V) bool {
+func fnEq(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1106,11 +1081,10 @@ func fnEq(ell *Ell, args []V, result *[]V) bool {
 			break
 		}
 	}
-	*result = []V{*NewBoolean(res)}
-	return true
+	return []V{*NewBoolean(res)}, true
 }
 
-func fnLt(ell *Ell, args []V, result *[]V) bool {
+func fnLt(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1124,11 +1098,10 @@ func fnLt(ell *Ell, args []V, result *[]V) bool {
 		}
 		etalon = arg.String
 	}
-	*result = []V{*NewBoolean(res)}
-	return true
+	return []V{*NewBoolean(res)}, true
 }
 
-func fnEquals(ell *Ell, args []V, result *[]V) bool {
+func fnEquals(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1149,11 +1122,10 @@ func fnEquals(ell *Ell, args []V, result *[]V) bool {
 		}
 		first = second
 	}
-	*result = []V{*NewBoolean(res)}
-	return true
+	return []V{*NewBoolean(res)}, true
 }
 
-func fnLess(ell *Ell, args []V, result *[]V) bool {
+func fnLess(ell *Ell, args []V) (result []V, ok bool) {
 	if len(args) < 1 || args[0].Type != VTypeString {
 		return ell.Errorf("first argument must be string")
 	}
@@ -1174,8 +1146,7 @@ func fnLess(ell *Ell, args []V, result *[]V) bool {
 		}
 		first = second
 	}
-	*result = []V{*NewBoolean(res)}
-	return true
+	return []V{*NewBoolean(res)}, true
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1233,6 +1204,6 @@ func StdInitialize(ell *Ell) bool {
 		return false
 	}
 
-	var result []V
-	return ell.EvalBlock(program, nil, &result)
+	_, ok := ell.EvalBlock(program, nil)
+	return ok
 }

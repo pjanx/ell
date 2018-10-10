@@ -53,9 +53,7 @@ func main() {
 	for i := 2; i < len(os.Args); i++ {
 		args = append(args, *ell.NewString(os.Args[i]))
 	}
-
-	var result []ell.V
-	if !L.EvalBlock(program, args, &result) {
+	if _, ok := L.EvalBlock(program, args); !ok {
 		fmt.Printf("%s: %s\n", "runtime error", L.Error)
 	}
 }
