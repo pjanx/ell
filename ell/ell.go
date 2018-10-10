@@ -539,7 +539,7 @@ type Handler func(*Ell, []V, *[]V) bool
 // Ell is an interpreter context.
 type Ell struct {
 	Globals map[string]V       // list of global variables
-	scopes  []map[string]V     // dynamic scopes from the newest
+	scopes  []map[string]V     // dynamic scopes from the oldest
 	Native  map[string]Handler // maps strings to Go functions
 
 	Error string // error information
@@ -564,8 +564,8 @@ func scopeFind(scope []*V, name string) int {
 
 // Get retrieves a value by name from the scope or from global variables.
 func (ell *Ell) Get(name string) *V {
-	for _, scope := range ell.scopes {
-		if v, ok := scope[name]; ok {
+	for i := len(ell.scopes) - 1; i >= 0; i-- {
+		if v, ok := ell.scopes[i][name]; ok {
 			return &v
 		}
 	}
@@ -577,9 +577,9 @@ func (ell *Ell) Get(name string) *V {
 
 // Set sets a value by name in the scope or in global variables.
 func (ell *Ell) Set(name string, v *V) {
-	for _, scope := range ell.scopes {
-		if _, ok := scope[name]; ok {
-			scope[name] = *v
+	for i := len(ell.scopes) - 1; i >= 0; i-- {
+		if _, ok := ell.scopes[i][name]; ok {
+			ell.scopes[i][name] = *v
 			return
 		}
 	}
@@ -711,11 +711,7 @@ func argsToScope(args []V) map[string]V {
 // EvalBlock executes a block and returns whatever the last statement returned,
 // eats args.
 func (ell *Ell) EvalBlock(body []V, args []V, result *[]V) bool {
-	// TODO: This is O(n), let's just rather append and traverse in reverse.
-	newScopes := make([]map[string]V, len(ell.scopes)+1)
-	newScopes[0] = argsToScope(args)
-	copy(newScopes[1:], ell.scopes)
-	ell.scopes = newScopes
+	ell.scopes = append(ell.scopes, argsToScope(args))
 
 	ok := true
 	for _, stmt := range body {
@@ -724,7 +720,7 @@ func (ell *Ell) EvalBlock(body []V, args []V, result *[]V) bool {
 			break
 		}
 	}
-	ell.scopes = ell.scopes[1:]
+	ell.scopes = ell.scopes[:len(ell.scopes)-1]
 	return ok
 }
 
@@ -782,7 +778,7 @@ func fnLocal(ell *Ell, args []V, result *[]V) bool {
 	}
 
 	// Duplicates or non-strings don't really matter to us, user's problem.
-	scope := ell.scopes[0]
+	scope := ell.scopes[len(ell.scopes)-1]
 
 	values := args[1:]
 	for _, name := range args[0].List {
