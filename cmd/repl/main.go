@@ -48,8 +48,7 @@ func complete(L *ell.Ell, line string, pos int) (
 		head, line = line[:lastSpace+1], line[lastSpace+1:]
 	}
 
-	for _, v := range L.Globals {
-		name := v.List[0].String
+	for name := range L.Globals {
 		if strings.HasPrefix(strings.ToLower(name), line) {
 			completions = append(completions, name)
 		}

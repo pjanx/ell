@@ -538,8 +538,8 @@ type Handler func(*Ell, []V, *[]V) bool
 
 // Ell is an interpreter context.
 type Ell struct {
-	Globals []*V               // list of global variables
-	scopes  [][]*V             // dynamic scopes from the newest
+	Globals map[string]V       // list of global variables
+	scopes  []map[string]V     // dynamic scopes from the newest
 	Native  map[string]Handler // maps strings to Go functions
 
 	Error string // error information
@@ -548,7 +548,8 @@ type Ell struct {
 // New returns a new interpreter context ready for program execution.
 func New() *Ell {
 	return &Ell{
-		Native: make(map[string]Handler),
+		Globals: make(map[string]V),
+		Native:  make(map[string]Handler),
 	}
 }
 
@@ -561,26 +562,15 @@ func scopeFind(scope []*V, name string) int {
 	return -1
 }
 
-// TODO: This is O(n), let's just make them a map[string]*V.
-func scopePrepend(scope []*V, name string, v *V) []*V {
-	key := NewString(name)
-	pair := NewList([]V{*key, *v})
-
-	result := make([]*V, len(scope)+1)
-	copy(result[1:], scope)
-	result[0] = pair
-	return result
-}
-
 // Get retrieves a value by name from the scope or from global variables.
 func (ell *Ell) Get(name string) *V {
 	for _, scope := range ell.scopes {
-		if place := scopeFind(scope, name); place >= 0 {
-			return &scope[place].List[1]
+		if v, ok := scope[name]; ok {
+			return &v
 		}
 	}
-	if place := scopeFind(ell.Globals, name); place >= 0 {
-		return &ell.Globals[place].List[1]
+	if v, ok := ell.Globals[name]; ok {
+		return &v
 	}
 	return nil
 }
@@ -588,18 +578,14 @@ func (ell *Ell) Get(name string) *V {
 // Set sets a value by name in the scope or in global variables.
 func (ell *Ell) Set(name string, v *V) {
 	for _, scope := range ell.scopes {
-		if place := scopeFind(scope, name); place >= 0 {
-			scope[place].List[1] = *v
+		if _, ok := scope[name]; ok {
+			scope[name] = *v
 			return
 		}
 	}
 
 	// Variables only get deleted by "arg" or from the global scope.
-	if place := scopeFind(ell.Globals, name); place >= 0 {
-		ell.Globals[place].List[1] = *v
-	} else {
-		ell.Globals = scopePrepend(ell.Globals, name, v)
-	}
+	ell.Globals[name] = *v
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -714,10 +700,10 @@ func (ell *Ell) evalStatement(statement *V, result *[]V) bool {
 	return false
 }
 
-func argsToScope(args []V) []*V {
-	scope := scopePrepend(nil, "args", NewList(args))
+func argsToScope(args []V) map[string]V {
+	scope := map[string]V{"args": *NewList(args)}
 	for i, arg := range args {
-		scope = scopePrepend(scope, fmt.Sprintf("%d", i+1), arg.Clone())
+		scope[fmt.Sprintf("%d", i+1)] = *arg.Clone()
 	}
 	return scope
 }
@@ -726,7 +712,7 @@ func argsToScope(args []V) []*V {
 // eats args.
 func (ell *Ell) EvalBlock(body []V, args []V, result *[]V) bool {
 	// TODO: This is O(n), let's just rather append and traverse in reverse.
-	newScopes := make([][]*V, len(ell.scopes)+1)
+	newScopes := make([]map[string]V, len(ell.scopes)+1)
 	newScopes[0] = argsToScope(args)
 	copy(newScopes[1:], ell.scopes)
 	ell.scopes = newScopes
@@ -796,12 +782,12 @@ func fnLocal(ell *Ell, args []V, result *[]V) bool {
 	}
 
 	// Duplicates or non-strings don't really matter to us, user's problem.
-	scope := &ell.scopes[0]
+	scope := ell.scopes[0]
 
 	values := args[1:]
 	for _, name := range args[0].List {
-		*scope = scopePrepend(*scope, name.String, values[0].Clone())
 		if len(values) > 0 {
+			scope[name.String] = *values[0].Clone()
 			values = values[1:]
 		}
 	}
