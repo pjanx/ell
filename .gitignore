@@ -9,3 +9,5 @@
 /ell.files
 /ell.creator*
 /ell.includes
+/ell.cflags
+/ell.cxxflags
