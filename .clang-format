@@ -1,0 +1,15 @@
+BasedOnStyle: GNU
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: ForContinuationAndIndentation
+BreakBeforeBraces: Attach
+BreakBeforeBinaryOperators: None
+SpaceAfterCStyleCast: true
+AlignAfterOpenBracket: DontAlign
+AlignEscapedNewlines: DontAlign
+AlignOperands: DontAlign
+AlignConsecutiveMacros: Consecutive
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+IndentGotoLabels: false

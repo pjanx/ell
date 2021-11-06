@@ -17,8 +17,8 @@
  */
 
 #include "ell.c"
-#include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/readline.h>
 
 static void
 run (struct ell *ell, struct ell_v *program) {

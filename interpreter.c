@@ -65,4 +65,3 @@ main (int argc, char *argv[]) {
 	ell_free (&ell);
 	return 0;
 }
-

@@ -16,14 +16,14 @@
  *
  */
 
+#include <ctype.h>
+#include <errno.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <stdbool.h>
-#include <setjmp.h>
 
 #if defined __GNUC__
 #define ELL_ATTRIBUTE_PRINTF(x, y) __attribute__ ((format (printf, x, y)))
@@ -188,9 +188,18 @@ ell_list (struct ell_v *head) {
 
 // --- Lexer -------------------------------------------------------------------
 
-enum ell_token { ELLT_ABORT,  ELLT_LPAREN, ELLT_RPAREN,
-	ELLT_LBRACKET, ELLT_RBRACKET, ELLT_LBRACE, ELLT_RBRACE,
-	ELLT_STRING, ELLT_NEWLINE, ELLT_AT };
+enum ell_token {
+	ELLT_ABORT,
+	ELLT_LPAREN,
+	ELLT_RPAREN,
+	ELLT_LBRACKET,
+	ELLT_RBRACKET,
+	ELLT_LBRACE,
+	ELLT_RBRACE,
+	ELLT_STRING,
+	ELLT_NEWLINE,
+	ELLT_AT
+};
 
 static const char *ell_token_names[] = {
 	[ELLT_ABORT]    = "end of input",
@@ -240,8 +249,8 @@ ell_lexer_advance (struct ell_lexer *self) {
 static bool
 ell_lexer_hexa_escape (struct ell_lexer *self, struct ell_buffer *output) {
 	const char *abc = "0123456789abcdef", *h, *l;
-	if (!self->len || !(h = strchr (abc, tolower (ell_lexer_advance (self))))
-	 || !self->len || !(l = strchr (abc, tolower (ell_lexer_advance (self)))))
+	if (!self->len || !(h = strchr (abc, tolower (ell_lexer_advance (self)))) ||
+		!self->len || !(l = strchr (abc, tolower (ell_lexer_advance (self)))))
 		return false;
 
 	ell_buffer_append_c (output, (h - abc) << 4 | (l - abc));
@@ -254,7 +263,8 @@ enum {
 	ELL_LEXER_COMMENT = '#'
 };
 
-static bool ell_lexer_is_whitespace (int c) {
+static bool
+ell_lexer_is_whitespace (int c) {
 	return !c || c == ' ' || c == '\t' || c == '\r';
 }
 
@@ -326,13 +336,12 @@ ell_lexer_next (struct ell_lexer *self, const char **e) {
 	enum ell_token token = ell_lexer_tokens[c];
 	if (!token) {
 		ell_buffer_append_c (&self->string, c);
-		while (self->len && !ell_lexer_is_whitespace (*self->p)
-			&& !ell_lexer_tokens[*self->p])
+		while (self->len && !ell_lexer_is_whitespace (*self->p) &&
+			!ell_lexer_tokens[*self->p])
 			ell_buffer_append_c (&self->string, ell_lexer_advance (self));
 		return ELLT_STRING;
 	}
-	if (token == ELLT_STRING
-	 && (*e = ell_lexer_string (self, &self->string)))
+	if (token == ELLT_STRING && (*e = ell_lexer_string (self, &self->string)))
 		return ELLT_ABORT;
 	return token;
 }
@@ -369,8 +378,8 @@ static bool
 ell_print_string_needs_quoting (struct ell_v *s) {
 	for (size_t i = 0; i < s->len; i++) {
 		unsigned char c = s->string[i];
-		if (ell_lexer_is_whitespace (c) || ell_lexer_tokens[c]
-		 || c == ELL_LEXER_ESCAPE || c < 32)
+		if (ell_lexer_is_whitespace (c) || ell_lexer_tokens[c] ||
+			c == ELL_LEXER_ESCAPE || c < 32)
 			return true;
 	}
 	return s->len == 0;
@@ -426,8 +435,8 @@ ell_print_block (struct ell_printer *printer, struct ell_v *list) {
 
 static bool
 ell_print_set (struct ell_printer *printer, struct ell_v *list) {
-	if (!list->head || strcmp (list->head->string, "set")
-	 || !list->head->next || list->head->next->next)
+	if (!list->head || strcmp (list->head->string, "set") ||
+		!list->head->next || list->head->next->next)
 		return false;
 
 	printer->putchar (printer, '@');
@@ -448,10 +457,10 @@ ell_print_list (struct ell_printer *printer, struct ell_v *list) {
 
 static void
 ell_print_v (struct ell_printer *printer, struct ell_v *v) {
-	if (ell_print_string (printer, v)
-	 || ell_print_block (printer, v)
-	 || ell_print_set (printer, v)
-	 || ell_print_list (printer, v))
+	if (ell_print_string (printer, v) ||
+		ell_print_block (printer, v) ||
+		ell_print_set (printer, v) ||
+		ell_print_list (printer, v))
 		return;
 
 	printer->putchar (printer, '(');
@@ -563,7 +572,7 @@ ell_parse_prefix_list (struct ell_v *seq, const char *name) {
 	return ell_list (prefix);
 }
 
-static struct ell_v * ell_parse_line (struct ell_parser *p, jmp_buf out);
+static struct ell_v *ell_parse_line (struct ell_parser *p, jmp_buf out);
 
 static struct ell_v *
 ell_parse_v (struct ell_parser *p, jmp_buf out) {
@@ -576,8 +585,7 @@ ell_parse_v (struct ell_parser *p, jmp_buf out) {
 
 	SKIP_NL ();
 	if (ACCEPT (ELLT_STRING))
-		return CHECK (ell_string
-			(p->lexer.string.s, p->lexer.string.len));
+		return CHECK (ell_string (p->lexer.string.s, p->lexer.string.len));
 	if (ACCEPT (ELLT_AT)) {
 		result = ell_parse_v (p, out);
 		return CHECK (ell_parse_prefix_list (result, "set"));
@@ -706,8 +714,8 @@ static bool
 ell_scope_prepend (struct ell *ell, struct ell_v **scope, const char *name,
 	struct ell_v *v) {
 	struct ell_v *key, *pair;
-	if (!ell_check (ell, (key = ell_string (name, strlen (name))))
-	 || !ell_check (ell, (pair = ell_list (key)))) {
+	if (!ell_check (ell, (key = ell_string (name, strlen (name)))) ||
+		!ell_check (ell, (pair = ell_list (key)))) {
 		ell_free_seq (v);
 		return false;
 	}
@@ -806,8 +814,8 @@ ell_eval_args (struct ell *ell,
 	for (; args; args = args->next) {
 		struct ell_v *evaluated = NULL;
 		// Arguments should not evaporate, default to a nil value
-		if (!ell_eval_statement (ell, args, &evaluated)
-		 || (!evaluated && !ell_check (ell, (evaluated = ell_list (NULL)))))
+		if (!ell_eval_statement (ell, args, &evaluated) ||
+			(!evaluated && !ell_check (ell, (evaluated = ell_list (NULL)))))
 			goto error;
 		ell_free_seq (evaluated->next);
 		evaluated->next = NULL;
@@ -889,15 +897,14 @@ ell_eval_value (struct ell *ell, const struct ell_v *body,
 }
 
 static bool
-ell_eval_statement
-	(struct ell *ell, const struct ell_v *statement, struct ell_v **result) {
+ell_eval_statement (struct ell *ell, const struct ell_v *statement,
+	struct ell_v **result) {
 	if (statement->type == ELL_STRING)
 		return ell_check (ell, (*result = ell_clone (statement)));
 
 	// Executing a nil value results in no value.  It's not very different from
 	// calling a block that returns no value--it's for our callers to resolve.
-	if (!statement->head
-	 || ell_eval_value (ell, statement->head, result))
+	if (!statement->head || ell_eval_value (ell, statement->head, result))
 		return true;
 
 	ell_free_seq (*result);
@@ -918,8 +925,8 @@ ell_eval_statement
 
 static bool
 args_to_scope (struct ell *ell, struct ell_v *args, struct ell_v **scope) {
-	if (!ell_check (ell, (args = ell_list (args)))
-	 || !ell_scope_prepend (ell, scope, "args", args))
+	if (!ell_check (ell, (args = ell_list (args))) ||
+		!ell_scope_prepend (ell, scope, "args", args))
 		return false;
 
 	size_t i = 0;
@@ -927,8 +934,8 @@ args_to_scope (struct ell *ell, struct ell_v *args, struct ell_v **scope) {
 		char buf[16] = "";
 		(void) snprintf (buf, sizeof buf, "%zu", ++i);
 		struct ell_v *copy = NULL;
-		if ((args && !ell_check (ell, (copy = ell_clone (args))))
-		 || !ell_scope_prepend (ell, scope, buf, copy))
+		if ((args && !ell_check (ell, (copy = ell_clone (args)))) ||
+			!ell_scope_prepend (ell, scope, buf, copy))
 			return false;
 	}
 	return ell_check (ell, (*scope = ell_list (*scope)));
@@ -1031,8 +1038,8 @@ ell_defn (ell_fn_local) {
 	struct ell_v *values = names->next;
 	for (names = names->head; names; names = names->next) {
 		struct ell_v *value = NULL;
-		if ((values && !ell_check (ell, (value = ell_clone (values))))
-		 || !ell_scope_prepend (ell, scope, names->string, value))
+		if ((values && !ell_check (ell, (value = ell_clone (values)))) ||
+			!ell_scope_prepend (ell, scope, names->string, value))
 			return false;
 		if (values)
 			values = values->next;
@@ -1047,9 +1054,9 @@ ell_defn (ell_fn_set) {
 
 	struct ell_v *v;
 	if ((v = name->next))
-		return ell_check (ell, (v = ell_clone (v)))
-			&& ell_check (ell, (*result = ell_clone (v)))
-			&& ell_set (ell, name->string, v);
+		return ell_check (ell, (v = ell_clone (v))) &&
+			ell_check (ell, (*result = ell_clone (v))) &&
+			ell_set (ell, name->string, v);
 
 	// We return an empty list for a nil value
 	if (!(v = ell_get (ell, name->string)))
@@ -1139,8 +1146,8 @@ ell_defn (ell_fn_cat) {
 		else
 			ell_buffer_append (&buf, args->string, args->len);
 	}
-	bool ok = !(ell->memory_failure |= buf.memory_failure)
-		&& ell_check (ell, (*result = ell_string (buf.s, buf.len)));
+	bool ok = !(ell->memory_failure |= buf.memory_failure) &&
+		ell_check (ell, (*result = ell_string (buf.s, buf.len)));
 	free (buf.s);
 	return ok;
 }
@@ -1178,8 +1185,8 @@ ell_defn (ell_fn_try) {
 		return true;
 
 	struct ell_v *msg;
-	if (ell->memory_failure
-	 || !ell_check (ell, (msg = ell_string (ell->error, strlen (ell->error)))))
+	if (ell->memory_failure ||
+		!ell_check (ell, (msg = ell_string (ell->error, strlen (ell->error)))))
 		return false;
 
 	free (ell->error); ell->error = NULL;
