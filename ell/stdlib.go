@@ -280,7 +280,7 @@ func fnMinus(ell *Ell, args []V) (result []V, ok bool) {
 
 	var res float64
 	if n, _ := fmt.Sscan(args[0].String, &res); n < 1 {
-		return ell.Errorf("invalid number: %f", args[0].String)
+		return ell.Errorf("invalid number: %s", args[0].String)
 	}
 	if len(args) == 1 {
 		res = -res
@@ -292,7 +292,7 @@ func fnMinus(ell *Ell, args []V) (result []V, ok bool) {
 		}
 		var value float64
 		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
-			return ell.Errorf("invalid number: %f", arg.String)
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
 		res -= value
 	}
@@ -321,7 +321,7 @@ func fnDivide(ell *Ell, args []V) (result []V, ok bool) {
 
 	var res float64
 	if n, _ := fmt.Sscan(args[0].String, &res); n < 1 {
-		return ell.Errorf("invalid number: %f", args[0].String)
+		return ell.Errorf("invalid number: %s", args[0].String)
 	}
 	for _, arg := range args[1:] {
 		if arg.Type != VTypeString {
@@ -329,7 +329,7 @@ func fnDivide(ell *Ell, args []V) (result []V, ok bool) {
 		}
 		var value float64
 		if n, _ := fmt.Sscan(arg.String, &value); n < 1 {
-			return ell.Errorf("invalid number: %f", arg.String)
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
 		res /= value
 	}
@@ -411,7 +411,7 @@ func fnEquals(ell *Ell, args []V) (result []V, ok bool) {
 	}
 	var first, second float64
 	if n, _ := fmt.Sscan(args[0].String, &first); n < 1 {
-		return ell.Errorf("invalid number: %f", args[0].String)
+		return ell.Errorf("invalid number: %s", args[0].String)
 	}
 	res := true
 	for _, arg := range args[1:] {
@@ -419,7 +419,7 @@ func fnEquals(ell *Ell, args []V) (result []V, ok bool) {
 			return ell.Errorf("arguments must be strings")
 		}
 		if n, _ := fmt.Sscan(arg.String, &second); n < 1 {
-			return ell.Errorf("invalid number: %f", arg.String)
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
 		if res = first == second; !res {
 			break
@@ -435,7 +435,7 @@ func fnLess(ell *Ell, args []V) (result []V, ok bool) {
 	}
 	var first, second float64
 	if n, _ := fmt.Sscan(args[0].String, &first); n < 1 {
-		return ell.Errorf("invalid number: %f", args[0].String)
+		return ell.Errorf("invalid number: %s", args[0].String)
 	}
 	res := true
 	for _, arg := range args[1:] {
@@ -443,7 +443,7 @@ func fnLess(ell *Ell, args []V) (result []V, ok bool) {
 			return ell.Errorf("arguments must be strings")
 		}
 		if n, _ := fmt.Sscan(arg.String, &second); n < 1 {
-			return ell.Errorf("invalid number: %f", arg.String)
+			return ell.Errorf("invalid number: %s", arg.String)
 		}
 		if res = first < second; !res {
 			break
